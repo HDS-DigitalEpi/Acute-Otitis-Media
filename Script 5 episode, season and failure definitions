@@ -1,0 +1,548 @@
+set.seed(4)
+
+# Set working directory and shared library path
+setwd("/media/volume/JaninaH/codes/")
+.libPaths("/shared-directory/sd-tools/apps/R/lib/")
+
+# Load required libraries
+library(nanoparquet)   # Reading/writing Parquet files
+library(dplyr)         # Data manipulation
+library(lubridate)     # Date handling
+library(readr)         # CSV reading
+library(data.table)    # Fast large-file operations
+library(stringr)       # String operations
+
+
+## ============================================================================
+## SECTION 16: Data Preparation – Tympanostomy Exclusion and Episode Definition
+## ============================================================================
+
+# Load main analysis dataset (includes all visits, prescriptions, comorbidities)
+dt <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_26_4.parquet"))
+
+# --- 16.1 Exclude visits associated with tympanostomy tube insertion ----------
+#
+#          Visits where procedure code DCA20 or SPAT1019 was recorded are
+#          marked as tube insertions. Patients with more than one tube insertion
+#          are flagged. All tube-insertion visits are then excluded from the
+#          antibiotic analysis, as the management context differs.
+
+df <- dt %>%
+  mutate(
+    putkitus        = ifelse(grepl("20|1019", TOIMP), 1, 0),  # Flag tube insertion visits
+    date            = as.Date(PVM)
+  ) %>%
+  group_by(FID) %>%
+  mutate(
+    useampi_putkitus = ifelse(sum(putkitus) > 1, 1, 0)        # Flag patients with >1 insertion
+  ) %>%
+  ungroup()
+
+# Retain only non-tube-insertion visits for antibiotic analysis
+df <- df %>% filter(putkitus == 0)
+
+# Exclude sector 3 (occupational health); not relevant to paediatric OM care
+dt <- df %>% filter(Sector != 3)
+
+
+# --- 16.2 Define otitis media episodes using a 30-day grouping window --------
+#
+#          Visits within 30 days of the first visit of a cluster are assigned
+#          to the same episode; a new episode begins when the gap from the
+#          episode start exceeds 30 days. This mirrors the clinical convention
+#          for counting discrete OM episodes.
+
+dt <- dt %>%
+  mutate(date_only = as.Date(PVM)) %>%
+  arrange(FID, date_only) %>%
+  group_by(FID) %>%
+  mutate(
+    new_period = {
+      period_id  <- 0L       # Initialise episode counter
+      start_date <- NA       # Track start date of current episode
+      result     <- integer(n())
+
+      for (i in seq_along(date_only)) {
+        # Start a new episode if none exists yet, or gap from episode start > 30 days
+        if (is.na(start_date) || as.numeric(date_only[i] - start_date) > 30) {
+          period_id  <- period_id + 1L
+          start_date <- date_only[i]
+        }
+        result[i] <- period_id   # Assign episode number to this row
+      }
+      result
+    }
+  ) %>%
+  ungroup()
+
+
+# --- 16.3 Calculate visit order within each episode --------------------------
+
+dt <- dt %>%
+  group_by(FID, new_period) %>%
+  mutate(
+    # Rank visits within each episode chronologically (1 = index/first visit)
+    visit_order_in_period = dense_rank(date_only),
+
+    # Count repeat visits: recorded only for the first visit row of each episode;
+    # subsequent visit rows within the same episode receive NA
+    repeat_count = if_else(
+      visit_order_in_period == 1,
+      as.integer(n_distinct(date_only) - 1),
+      NA_integer_
+    )
+  ) %>%
+  ungroup()
+
+# Binary flag: 0 = index (first) visit in episode, 1 = repeat visit
+dt$is_repetative <- ifelse(grepl("1", dt$visit_order_in_period), 0, 1)
+
+
+## ============================================================================
+## SECTION 17: Merge rAOM Status, Age Groups, and Comorbidity Flags
+## ============================================================================
+
+# Load pre-computed rAOM (recurrent acute otitis media) status from history data
+korvat <- read_parquet("/media/volume/JaninaH/korva_historia")
+korvat <- korvat %>% select(FID, PVM, raom)
+
+# Merge rAOM flag into the main dataset by patient ID and visit date
+dt <- left_join(dt, korvat, by = c("FID", "PVM"))
+
+# Create age groups relevant to paediatric OM epidemiology
+dt$Ikalk <- cut(
+  dt$Ika,
+  breaks = c(0, 2, 5, 12, 18),
+  labels = c("0–2", "2–5", "5–12", "12–18"),
+  right  = FALSE   # Lower bound inclusive, upper bound exclusive
+)
+
+# Remove any duplicate rows introduced by the merge
+dt <- unique(dt)
+table(dt$Ikalk)
+
+# Create a binary comorbidity flag: 1 if any of the atopic or immunological
+# conditions (allergic rhinitis, atopic dermatitis, asthma, immunodeficiency,
+# Down syndrome) was present prior to the visit
+dt <- dt %>%
+  mutate(conditions = if_else(
+    J30 == 1 | L20 == 1 | J45_J46 == 1 | D80_D89 == 1 | Q90 == 1, 1, 0
+  ))
+
+# Replace NA (no prior comorbidity data) with 0 (no comorbidity)
+dt <- dt %>%
+  mutate(conditions = if_else(is.na(conditions), 0, conditions))
+
+
+## ============================================================================
+## SECTION 18: Antibiotic Classification and Seasonality
+## ============================================================================
+
+# Remove remaining duplicate rows by key visit-identifying variables
+dt <- dt %>%
+  distinct(FID, PVM, Sector, ATC_CODE, FD_HASH_Rekisterointinro, .keep_all = TRUE)
+
+# Classify prescribed antibiotics by guideline adherence:
+#   Amoxicillin (J01CA04)           = first-line, narrow-spectrum (guideline-recommended)
+#   Amoxicillin-clavulanic (J01CR02) = broad-spectrum (second-line)
+#   Other J01                        = other systemic antibacterials
+#   No ab                            = no antibiotic prescribed
+dt <- dt %>%
+  mutate(ablk = case_when(
+    ATC_CODE %in% c("J01CA04")  ~ "Amoxicillin",
+    ATC_CODE %in% c("J01CR02")  ~ "Amoxicillin-clavulanic",
+    grepl("^J01", ATC_CODE, ignore.case = TRUE) &
+      !ATC_CODE %in% c("J01CR02", "J01CA04") ~ "other",
+    TRUE ~ "No ab"
+  ))
+
+# Add season of visit and diagnosis subgroup
+dt <- dt %>%
+  mutate(
+    PVM    = as.Date(PVM),
+    month  = month(PVM),
+    season = case_when(
+      month %in% c(12, 1, 2)  ~ "talvi",   # Winter
+      month %in% c(3, 4, 5)   ~ "kevät",   # Spring
+      month %in% c(6, 7, 8)   ~ "kesä",    # Summer
+      month %in% c(9, 10, 11) ~ "syksy",   # Autumn
+      TRUE                     ~ NA_character_
+    ),
+    # Distinguish H66 (suppurative/acute OM) from H65/H67 (non-suppurative/OM with effusion)
+    dg = if_else(grepl("H66", KOODI, fixed = TRUE), "H66", "H65_H67")
+  ) %>%
+  select(-month)   # Remove intermediate month column
+
+# Save base analysis dataset
+dt %>% write_parquet("/media/volume/JaninaH/perusdt")
+
+
+## ============================================================================
+## SECTION 19: Worst-Case Antibiotic Selection Scenarios
+##
+##             When multiple prescriptions exist for the same patient-visit,
+##             the "worst case" (least guideline-adherent) antibiotic is
+##             retained. This conservative approach ensures that guideline
+##             adherence rates are not overestimated.
+##
+##             Priority order (most to least guideline-adherent):
+##               1 = other (unclassified antibiotics – most concerning)
+##               2 = Amoxicillin-clavulanic (broad-spectrum, second-line)
+##               3 = Amoxicillin (narrow-spectrum, first-line, guideline-recommended)
+##              99 = No ab (default / unknown)
+## ============================================================================
+
+dt <- read_parquet("/media/volume/JaninaH/perusdt")
+
+DT <- as.data.table(dt)
+DT[, PVM := as.IDate(PVM)]
+
+# Assign numeric priority reflecting distance from guideline recommendation
+DT[, prio := fcase(
+  ablk == "other",                  1L,
+  ablk == "Amoxicillin-clavulanic", 2L,
+  ablk == "Amoxicillin",            3L,
+  default = 99L
+)]
+
+# --- Scenario A: Worst case per sector and patient-visit ---------------------
+#     One row retained per FID + PVM + Sector, keeping the least
+#     guideline-adherent antibiotic. Reflects sector-level prescribing.
+
+df_ws <- DT[
+  , .SD[which.min(prio)],
+  by = .(Sector, FID, PVM)
+]
+
+prop.table(table(df_ws$Sector, df_ws$ablk), margin = 1) * 100
+# Sector 1 (public):  ~57% Amoxicillin, ~8% Amoxicillin-clav, ~24% No ab, ~11% other
+# Sector 2 (private): ~29% Amoxicillin, ~23% Amoxicillin-clav, ~35% No ab, ~12% other
+# n = 720,669 rows
+
+df_ws %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_sector.parquet")
+
+
+# --- Scenario B: Worst case per prescribing physician and patient-visit ------
+#     One row retained per FD_HASH + FID + PVM; captures within-physician
+#     worst selection independent of sector.
+
+df_wd <- DT[
+  , .SD[which.min(prio)],
+  by = .(FD_HASH_Rekisterointinro, FID, PVM)
+]
+
+prop.table(table(df_wd$Sector, df_wd$ablk), margin = 1) * 100
+# n = 735,606 rows
+
+df_wd %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_doctor.parquet")
+
+
+# --- Scenario C: Worst case per physician, sector, and patient-visit ---------
+#     Most granular scenario; accounts for the 1,716 physicians who practise
+#     in both public and private sectors.
+
+df_wds <- DT[
+  , .SD[which.min(prio)],
+  by = .(FD_HASH_Rekisterointinro, Sector, FID, PVM)
+]
+
+prop.table(table(df_wds$Sector, df_wds$ablk), margin = 1) * 100
+# n = 737,322 rows
+
+df_wds %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_doctor_sector.parquet")
+
+# Total unique patients across scenarios
+fids <- unique(df_ws$FID)
+length(fids)  # n = 295,064
+
+
+## ============================================================================
+## SECTION 20: Index Visit Filtering and Antibiotic Strategy Analysis
+##
+##             Analysis is restricted to index (first) visits within each
+##             episode (is_repetative == 0), which represent the initial
+##             clinical decision point for antibiotic prescribing.
+## ============================================================================
+
+# --- Scenario A: Sector-level worst case -------------------------------------
+
+dws <- df_ws %>% filter(is_repetative == 0)         # Index visits only (n = 582,679)
+dws %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_sector.parquet")
+
+# Restrict to visits with an antibiotic prescribed (abp == 1) for
+# guideline adherence analysis
+dws <- dws %>% filter(abp == 1)                     # n = 457,539
+dws %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_sector.parquet")
+
+prop.table(table(dws$Sector, dws$ablk), margin = 1) * 100
+# Public:  ~79% Amoxicillin, ~8% Amoxicillin-clav, ~12% other
+# Private: ~53% Amoxicillin, ~33% Amoxicillin-clav, ~14% other
+
+
+# --- Scenario B: Physician-level worst case ----------------------------------
+
+dwd <- df_wd %>% filter(is_repetative == 0)
+dwd %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor.parquet")
+
+dwd <- dwd %>% filter(abp == 1)
+prop.table(table(dwd$Sector, dwd$ablk), margin = 1) * 100
+dwd %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_doctor.parquet")
+
+
+# --- Scenario C: Physician + sector worst case -------------------------------
+
+dwds <- df_wds %>% filter(is_repetative == 0)
+dwds %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor_sector.parquet")
+
+dwds <- dwds %>% filter(abp == 1)
+prop.table(table(dwds$Sector, dwds$ablk), margin = 1) * 100
+dwds %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
+
+
+## ============================================================================
+## SECTION 21: Treatment Failure Analysis
+##
+##             A management failure is defined as a repeat visit within the
+##             same episode where an antibiotic was dispensed (ab == 1),
+##             occurring after an antibiotic was prescribed at the index visit.
+##             A 7-day window from the episode start date is also applied
+##             (failure7/abfailure7) to capture early treatment failures.
+## ============================================================================
+
+dt <- read_parquet("/media/volume/JaninaH/perusdt")
+
+# --- 21.1 Deduplicate visits retaining the antibiotic-dispensed row ----------
+#
+#          For each grouping (by physician+sector, or by sector alone), retain
+#          one row per visit according to a priority hierarchy:
+#            1 = antibiotic dispensed (ab == 1) — most informative
+#            2 = antibiotic prescribed but not confirmed dispensed (J01 ATC code)
+#            3 = no antibiotic — visit without antibiotic information
+
+# Doctoral + sectoral deduplication (physician × sector × patient × date)
+dt <- dt %>%
+  group_by(FID, PVM, Sector, FD_HASH_Rekisterointinro) %>%
+  mutate(has_J01 = any(grepl("^J01", ATC_CODE))) %>%
+  filter(
+    (has_J01 & grepl("^J01", ATC_CODE)) |   # If J01 exists in group, keep only J01 rows
+      (!has_J01 & row_number() == 1)          # Otherwise keep one row
+  ) %>%
+  ungroup()
+
+# Sectoral deduplication only (sector × patient × date)
+dt <- dt %>%
+  group_by(FID, PVM, Sector) %>%
+  mutate(has_J01 = any(grepl("^J01", ATC_CODE))) %>%
+  filter(
+    (has_J01 & grepl("^J01", ATC_CODE)) |
+      (!has_J01 & row_number() == 1)
+  ) %>%
+  ungroup()
+
+# Apply study period filter
+dt <- dt %>%
+  filter(PVM >= as.Date("2017-01-01") & PVM <= as.Date("2022-12-31"))
+
+
+# --- 21.2 Create one uniquely deduplicated row per visit per grouping --------
+#
+#          Doctoral + sectoral: one row per FID + PVM + Sector + physician hash
+
+uq <- dt %>%
+  group_by(FID, PVM, Sector, FD_HASH_Rekisterointinro) %>%
+  mutate(priority = case_when(
+    ab == 1                      ~ 1,   # Antibiotic dispensed → highest priority
+    grepl("^J01", ATC_CODE)      ~ 2,   # Antibiotic prescribed (not confirmed dispensed)
+    TRUE                         ~ 3    # No antibiotic
+  )) %>%
+  slice_min(priority, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(-priority)
+
+# Sectoral only: one row per FID + PVM + Sector
+uq <- dt %>%
+  group_by(FID, PVM, Sector) %>%
+  mutate(priority = case_when(
+    ab == 1                  ~ 1,
+    grepl("^J01", ATC_CODE)  ~ 2,
+    TRUE                     ~ 3
+  )) %>%
+  slice_min(priority, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(-priority)
+
+
+# --- 21.3 Calculate treatment failure flags ----------------------------------
+#
+#          failed_visit = 1 when a repeat visit (is_repetative == 1) has an
+#          antibiotic dispensed (ab == 1), indicating the initial treatment
+#          did not resolve the infection.
+
+uq <- uq %>%
+  arrange(FID, PVM, new_period) %>%
+  group_by(visit_order_in_period) %>%
+  mutate(
+    ab_reps      = ab == "1" & is_repetative == "1",  # Repeat visit with antibiotic
+    has_ab_after = ab_reps >= 1,
+    failed_visit = if_else(is_repetative == 1 & has_ab_after, 1, 0)
+  ) %>%
+  ungroup() %>%
+  select(-has_ab_after)
+
+
+# --- 21.4 Identify the care sector at episode index visit (index_sector) -----
+#
+#          For episodes spanning both sectors (e.g., index visit in public,
+#          follow-up in private), index_sector = "both" is assigned.
+
+uq <- uq %>%
+  group_by(FID, new_period) %>%
+  mutate(index_sector = Sector[is_repetative == 0][1]) %>%
+  ungroup()
+
+uq <- uq %>%
+  group_by(FID, new_period) %>%
+  mutate(
+    start_sectors = list(unique(Sector[is_repetative == 0 & !is.na(Sector)]))
+  ) %>%
+  ungroup() %>%
+  mutate(
+    index_sector = map_chr(start_sectors, ~ {
+      n <- length(.x)
+      if (n == 0)      NA_character_
+      else if (n == 1) as.character(.x[1])
+      else             "both"
+    })
+  )
+
+
+# --- 21.5 Flag antibiotic treatment failures (abfailure) ---------------------
+#
+#          abfailure = 1 when failed_visit == 1 AND the index visit of the
+#          same episode had an antibiotic prescribed (abp == 1).
+#          This distinguishes episodes where antibiotics were genuinely
+#          tried and failed from those where no antibiotic was initially given.
+
+# Identify episodes where an antibiotic was prescribed at the index visit
+abp_initials <- uq %>%
+  filter(is_repetative == 0 & abp == 1) %>%
+  select(FID, new_period)
+
+# Mark antibiotic treatment failures
+uq <- uq %>%
+  mutate(abfailure = if_else(
+    failed_visit == 1 &
+      FID %in% abp_initials$FID &
+      new_period %in% abp_initials$new_period,
+    1, 0
+  ))
+
+# Determine the sector in which the antibiotic was initiated at the index visit
+start_ab_sectors <- uq %>%
+  filter(is_repetative == 0, abp == 1) %>%
+  group_by(FID, new_period) %>%
+  summarise(
+    abindexsector = if (n_distinct(index_sector) > 1) "both" else unique(index_sector),
+    .groups = "drop"
+  )
+
+df <- left_join(uq, start_ab_sectors, by = c("FID", "new_period"))
+table(df$abfailure, df$Sector)
+
+
+# --- 21.6 Calculate time from episode start to failure -----------------------
+#
+#          failuredate records the date of the failed (repeat) visit.
+#          failure7 and abfailure7 flag failures occurring within 7 days
+#          of the episode start date, capturing early treatment failures.
+
+df$failuredate <- ifelse(df$failed_visit == 1, as.character(df$PVM), NA)
+df$failuredate <- as.Date(df$failuredate)
+
+# Extract episode start dates (date of first/index visit per episode)
+start_dates <- df %>%
+  filter(is_repetative == 0) %>%
+  group_by(FID, new_period) %>%
+  summarise(start_date = min(PVM), .groups = "drop")
+
+df2 <- df %>%
+  left_join(start_dates, by = c("FID", "new_period"))
+
+# failure7: any treatment failure (regardless of initial antibiotic) within 7 days
+df <- df2 %>%
+  mutate(
+    failure7 = case_when(
+      failed_visit == 1 &
+        !is.na(failuredate) &
+        !is.na(start_date) &
+        failuredate >= start_date &
+        failuredate <= start_date + 7 ~ 1,
+      TRUE ~ 0
+    )
+  )
+table(df$failure7, df$index_sector)
+
+# abfailure7: antibiotic-specific failure within 7 days of episode start
+df2 <- df %>%
+  mutate(
+    failuredate = as.Date(failuredate),
+    startdate   = as.Date(start_date),
+    abfailure7  = case_when(
+      abfailure == 1 &
+        !is.na(failuredate) &
+        !is.na(startdate) &
+        failuredate >= start_date &
+        failuredate <= start_date + 7 ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+# Flag index visits where an antibiotic was prescribed (for model covariates)
+df2$first_vis_ab <- as.integer(df2$is_repetative == 0 & df2$abp == TRUE)
+
+# Sort data chronologically per patient
+uq <- df2 %>% arrange(FID, PVM)
+
+dats <- uq %>%
+  mutate(
+    startdate   = as.Date(startdate),
+    failuredate = as.Date(failuredate)
+  )
+
+# Propagate episode start date to all rows within the same episode
+# (needed to compute time-to-failure for repeat visit rows)
+dats <- dats %>%
+  arrange(FID, new_period, PVM) %>%
+  group_by(FID, new_period) %>%
+  fill(startdate, .direction = "downup") %>%
+  ungroup()
+
+table(dats$abfailure7, dats$index_sector)
+
+# Recalculate failure7 with propagated start dates for consistency
+data <- dats %>%
+  mutate(
+    failuredate = as.Date(failuredate),
+    startdate   = as.Date(startdate),
+    failure7    = case_when(
+      failed_visit == 1 &
+        !is.na(failuredate) &
+        !is.na(startdate) &
+        failuredate >= startdate &
+        failuredate <= startdate + 7 ~ 1,
+      TRUE ~ 0
+    )
+  )
+
+table(data$failure7, data$index_sector)
+
+# Remove list-column (start_sectors) not compatible with Parquet format
+df <- data %>% select(-start_sectors)
+
+# --- Save final failure datasets by deduplication scenario -------------------
+
+# Sectoral deduplication
+df %>% write_parquet("/media/volume/JaninaH/failuredata_sectoral.parquet")
+
+# Doctoral + sectoral deduplication
+df %>% write_parquet("/media/volume/JaninaH/failuredata_doctor_sectoral.parquet")
