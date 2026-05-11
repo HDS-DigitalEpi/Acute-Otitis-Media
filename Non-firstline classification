@@ -1,0 +1,21 @@
+df<-read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
+df<-read_parquet("/media/volume/JaninaH/abdt_worstcase_sector.parquet")
+
+colnames(df)
+library(dplyr)
+df<-df%>%filter(ablk=="other")
+library(dplyr)
+df <- df %>% mutate(ATC_CODE = toupper(trimws(ATC_CODE)))
+dt <- df %>%
+  mutate(
+    ab_class = case_when(
+      grepl("^J01FA", ATC_CODE) ~ "Macrolides (J01FA)",
+      grepl("^J01DC|^J01DD", ATC_CODE) ~ "Cephalosporins 2nd/3rd gen (J01DC/J01DD)",
+      grepl("^J01EE", ATC_CODE) ~ "Trimethoprim–sulfa (J01EE)",
+      grepl("^J01M|^J01AA|^J01GB",  ATC_CODE) ~ "Fluoroquinolones, Tetracyclines, Aminoglyk.",
+      TRUE ~ "Other"
+    )
+  )
+table(dt$ab_class, dt$Sector)
+oth<-dt%>%filter(ab_class=="Other")
+table(oth$ATC_CODE, oth$Sector)
