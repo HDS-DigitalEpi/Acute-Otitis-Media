@@ -1,0 +1,81 @@
+# =========================================================
+# MANAGEMENT STRATEGY
+# =========================================================
+
+dt <- read_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor_sector.parquet")
+
+# --- Cleaning ---
+dt <- dt %>%
+  mutate(conditions = if_else(is.na(conditions), 0, conditions))
+
+# HUOM: tämä yhdistää "elakelaiset" → "toissa"
+# eli collapse sos-luokka (tärkeä tulkinnassa!)
+dt <- dt %>%
+  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
+
+# erikoisala: NA → "ei" (tärkeä ettei putoa mallista)
+dt <- dt %>%
+  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
+
+# sos NA → "tuntematon"
+dt <- dt %>%
+  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
+
+# QC: jakauma
+table(dt$erikoisala)
+
+# =========================================================
+# CRUDE MODEL
+# =========================================================
+
+model <- glmmTMB(
+  abp ~ Sector + (1|FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+
+# =========================================================
+# ADJUSTED MODEL
+# =========================================================
+
+model <- glmmTMB(
+  abp ~ Sector + Ikalk + Sukupuoli + kieli + sos +
+    erikoisala + season + raom + conditions + dg + (1 | FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+
+summary(model)
+exp(confint(model))
+
+
+# =========================================================
+# DESCRIPTIVES
+# =========================================================
+
+dt %>%
+  group_by(Sector) %>%
+  summarise(
+    n_total = n(),
+    n_abp = sum(abp == 1, na.rm = TRUE),
+    pct_abp = 100 * n_abp / n_total
+  )
+
+# =========================================================
+# DUPLICATE VISITS CHECK 
+# =========================================================
+
+counts <- dt %>%
+  group_by(FID, PVM, Sector) %>%
+  summarise(
+    n_rows = n(),
+    n_fd_hash = n_distinct(FD_HASH_Rekisterointinro)
+  ) %>%
+  filter(n_fd_hash > 1)
+
+
+
+counts
