@@ -1,6 +1,11 @@
-#mixed effects for management and abtreatment-failure
+============================================
+# MIXED EFFECTS FOR MANAGEMENT AND ANTIBIOTIC TREATMENT FAILURE
+# =========================================================
+
 setwd("/media/volume/JaninaH/codes/")
 .libPaths("/shared-directory/sd-tools/apps/R/lib/")
+
+# --- Load libraries ---
 library(nanoparquet)
 library(dplyr)
 library(lubridate)
@@ -17,713 +22,149 @@ library(lme4)
 library(glmmTMB)
 library(openxlsx)
 library(sandwich)
-#set path for cmdstanr
+
+# cmdstan path (brms backend)
 set_cmdstan_path("/home/hansasja/Desktop/shared-directory/cmdstan-2.37.0/")
-#read_data
-#df<-read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_uq_november.parquet"))
-colnames(dp)
-dt<-read_parquet("/media/volume/JaninaH/failuredata_doctor_sectoral.parquet")
-dt<-read_parquet("/media/volume/JaninaH/failuredata_sectoral.parquet")
+
+# =========================================================
+# DATA IMPORT
+# =========================================================
+
+# HUOM: ylikirjoitat dt heti seuraavalla rivillä
+dt <- read_parquet("/media/volume/JaninaH/failuredata_doctor_sectoral.parquet")
+
+# Summary check
 table(dt$erikoisala)
-#80 na values to group ei
+
+# =========================================================
+# DATA CLEANING
+# =========================================================
+
 dt <- dt %>%
   mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
+
 dt <- dt %>%
   mutate(sos = if_else(is.na(sos), "tuntematon", sos))
 
+# NA diagnostics
 sum(is.na(dt$erikoisala))
 sum(is.na(dt$FID))
 sum(is.na(dt$Sector))
 sum(is.na(dt$index_sector))
 sum(is.na(dt$sos))
-#transfer to factors
-dt$failed_visit<- factor(dt$failed_visit)
-dt$Sector <- factor(dt$Sector)  # kategorinen selittäjä 
-dt$FID    <- factor(dt$FID)     # ryhmittelytunniste: TÄMÄ pitää olla factor
-dt$season <-factor(dt$season)
-dt$kieli <-factor(dt$kieli)
+
+# =========================================================
+# FACTOR CONVERSION
+# =========================================================
+
+dt$failed_visit <- factor(dt$failed_visit)
+dt$Sector <- factor(dt$Sector)
+dt$FID    <- factor(dt$FID)     # RANDOM EFFECT → tärkeä!
+dt$season <- factor(dt$season)
+dt$kieli  <- factor(dt$kieli)
+
 sum(is.na(dt$kieli))
 
-
-
-#-------first management_failures_by_index sector
-#täytyy laajentaa jos useampi index sectori jotta toistuvassa visiitissä molemmat sektorit merkitty aloitukseen
-df_expanded <- dt %>%
-  mutate(index_sector = case_when(
-    index_sector %in% c("1","2") ~ index_sector,
-    index_sector == "both" ~ "1,2"
-  )) %>%
-  separate_rows(index_sector, sep = ",")
-
-df_expanded %>%
-  summarise(
-    prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
-  )
-#97,3%
-df_expanded%>%write_parquet("/media/volume/JaninaH/sec_doc_expanded")
-
-df_expanded %>%group_by(index_sector)%>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#1             509912      5670        1.11
-#2             238581      4434        1.86
-#---------------sectoral
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#  1 1             497052      5603        1.13
-## 2 2             234312      4394        1.88
-#------------------------------------------------
-#sensitivity analyses with failed sector
-dt %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#737322      9788        1.3275
-dt %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#737322      9401     1.27502
-dt %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failed_visit == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#n_total n_failure pct_failure
-#1  737322     51708    7.012947
-dt %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#n_total n_failure pct_failure
-#<int>     <int>       <dbl>
-# 1  737322     50720    6.878948
-# group by sector
-dt %>% group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#  Sector n_total n_failure pct_failure
-#<dbl>   <int>     <int>       <dbl>
-#  1      1  502375      5295        1.05
-#  2      2  234947      4493        1.91
-dt %>% group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#  Sector n_total n_failure pct_failure
-#<dbl>   <int>     <int>       <dbl>
-#  1      1  502375      5006       0.996
-#  2      2  234947      4395       1.87 
-dt %>% group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failed_visit == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#Sector n_total n_failure pct_failure
-#<dbl>   <int>     <int>       <dbl>
-#  1      1  502375     25417        5.06
-#  2      2  234947     26291       11.2 
-dt %>%group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-# sector n_total n_failure pct_failure
-#<dbl>   <int>     <int>       <dbl>
-#  1      1  502375     24741        4.92
-#  2      2  234947     25979       11.1 
-model<-glmmTMB(failed_visit~ Sector + (1|FID), data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(failed_visit ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
-                    erikoisala + sos + season + raom + dg + (1 | FID), 
-                  data = dt, family = binomial(link = "logit"))  # 
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model<-glmmTMB(failure7~ Sector + (1|FID), data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(failure7 ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = dt, family = binomial(link = "logit"))  # 
-summary(model)
-CI <- confint(model)
-exp(CI)
-######
-dt%>%
-  group_by(index_sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  )
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#1             498741      5354        1.07
-#2             227410      4118        1.81
-#both           11171       316        2.83
-df_expanded%>%
-  group_by(index_sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  )
-#index_sector n_total n_failure pct_failure
-#<1             509912      5670        1.11
-# 2             238581      4434        1.86
-# 2             239009      4333        1.81
-#--------sectoral
-# index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#1 1             497052      5603        1.13
-#2 2             234312      4394        1.88
-fail<-df_expanded%>%filter(failed_visit==1)
-fail %>%
-  summarise(
-    prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
-  )
-#91,6%
-
-df_expanded %>%
-  group_by(index_sector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failed_visit == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  ) 
-#1            509912     26470        5.19
-#2            238581     25869       10.8 
-
-#management failures by glmmmtmb
-model<-glmmTMB(failed_visit~ index_sector + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-
-model <- glmmTMB(failed_visit ~index_sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df_expanded, family = binomial(link = "logit"))  # 
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-#lisätään muuttujia yksitellen, katsotaan mikä vähentää sektorin vaikutuksen 2,16->1.52
-model<-glmmTMB(failed_visit~ index_sector + raom + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model<-glmmTMB(failed_visit~ index_sector + raom + erikoisala + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model<-glmmTMB(failed_visit~ index_sector + raom + erikoisala + season + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-model<-glmmTMB(failure7~ index_sector + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(failure7 ~index_sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 |FID), 
-                 data = df_expanded, family = binomial(link = "logit"))  
-summary(model)
-CI <- confint(model)
-exp(CI)
-#---------------------------------------------------------------
-#####-----abtreatment failures
+# =========================================================
+# INDEX SECTOR EXPANSION (BOTH → 1,2)
+# =========================================================
 
 df_expanded <- dt %>%
-  mutate(abindexsector= case_when(
-    abindexsector %in% c("1","2") ~ abindexsector,
-    abindexsector == "both" ~ "1,2"
-  )) %>%
-  separate_rows(abindexsector, sep = ",")
-
-#filtteröidään pois käynnit joissa ei indexsektorissa abta(lähtisivät analyysissäkin pois)
-df<-df_expanded%>%filter(!abindexsector=="NA")
-
-df %>%
-  group_by(abindexsector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  ) 
-#abindexsector n_total n_failure pct_failure
-#<chr>           <int>     <int>       <dbl>
-# 1              394836     21641        5.48
-# 2              175826     20883       11.9 
-
-df %>%
-  group_by(abindexsector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  ) 
-#abindexsector n_total n_failure pct_failure
-#<chr>           <int>     <int>       <dbl>
-# 1              394836      4224        1.07
-#2              175826      3363        1.91
-
-
-model<-glmmTMB(abfailure ~ abindexsector + (1|FID), data = df, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abfailure ~abindexsector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abfailure7 ~ abindexsector + (1|FID),data = df, family = binomial(link = "logit"))
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abfailure7 ~abindexsector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-#------------------------------------------------------------------------------------
-#management strategy
-#------------------------------------------------------------------------------------
-#read data, three different filtrations
-dt<-read_parquet("/media/volume/JaninaH/strategydt_worstcase_sector.parquet")
-dt<-read_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor.parquet")
-dt<-read_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor_sector.parquet")
-
-dt <- dt %>%
-  mutate(conditions = if_else(is.na(conditions), 0, conditions))
-dt <- dt %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-dt <- dt %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-dt <- dt %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-table(dt$erikoisala)
-#------------------------------------------------------------------------------------------
-#first crude, than adj
-model <- glmmTMB(abp ~ Sector + (1|FID),
-                 data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abp ~Sector + Ikalk + Sukupuoli + kieli + sos + erikoisala  
-                    + season + raom + conditions + dg + (1 | FID), 
-                 data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-dt%>%
-  group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_abp = sum(abp == 1, na.rm = TRUE),
-    pct_abp = 100 * n_abp / n_total
-  )
-
-counts <- dt %>%
-  group_by(FID, PVM, Sector) %>%
-  summarise(
-    n_rows = n(),
-    n_fd_hash = n_distinct(FD_HASH_Rekisterointinro)
+  mutate(
+    index_sector = case_when(
+      index_sector %in% c("1","2") ~ index_sector,
+      index_sector == "both" ~ "1,2"
+    )
   ) %>%
-  filter(n_fd_hash > 1)
-
-counts
-
-
-out <- dt %>%
-  group_by(FID, PVM, Sector) %>%
-  filter(n_distinct(FD_HASH_Rekisterointinro) > 1) %>% 
-  arrange(FID, PVM, Sector)
-
-out
-
-#---------------------------------------------------------------------------------
-#antibiotic treatment strategy
-#---------------------------------------------------------------------------------
-dt<-read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
-dt <- dt %>%
-  mutate(conditions = if_else(is.na(conditions), 0, conditions))
-dt <- dt %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-dt <- dt %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-dt <- dt %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-table(dt$erikoisala)
-#transfer to factors
-dt$ablk   <- factor(dt$ablk)    # riippuva muuttuja: 3 tasoa
-dt$Sector <- factor(dt$Sector)  # kategorinen selittäjä 
-dt$FID    <- factor(dt$FID)     # ryhmittelytunniste: TÄMÄ pitää olla factor
-dt$season <-factor(dt$season)
-dt$sos <-factor(dt$sos)
-table(dt$sos)
-sum(is.na(dt$sos))
-dt$kieli <-factor(dt$kieli)
-sum(is.na(dt$kieli))
-
-table(dt$kieli)
-dt$conditions <- factor(dt$conditions)
-dt$erikoisala <-factor(dt$erikoisala)
-dt$Ikalk <-factor(dt$Ikalk)
-dt$dg <-factor(dt$dg)
-dt$Sukupuoli <-factor(dt$Sukupuoli)
-dt$raom <-factor(dt$raom)
-DT<-as.data.table(dt)
-DT[, .N, by = FID][, .(
-  mean = mean(N),
-  median = median(N),
-  min = min(N),
-  max = max(N)
-)]
-DT[, .N, by = FID]$N |> summary()
-#set formula
-form <- bf(ablk ~ Sector + (1 | FID))
-table(dt$season)
-#filter only first visits (episode index visit) for analysis
-dt<-dt%>%filter(is_repetative==0)
-#filter only visits with antibiotic (abp==1)
-dt<-dt%>%filter(abp==1)
-#remove sector 3
-dt <- dt[dt$Sector != 3, ]
-#check na values
-dt[!complete.cases(dt), ]
-#randomize data so that every chain has similar calculation mix
-set.seed(123) 
-dt <- dt[sample(nrow(dt)), ]
-#smaller sample of dta
-table(dt$ablk)
-sum(is.na(dt$ablk))
-# Perusformula: riippuvainen muuttuja ~ ennustajat + satunnaisintersepti potilaalle
-form <- bf(ablk ~ Sector + (1 ||FID), decomp = "QR")  # korvaa x1,x2,x3 omilla muuttujilla
-#katso mitä prioreita voi asettaa / mitkä parametrit mallissa on
-default_prior(ablk ~ Sector + (1 || FID), data = dt, family = categorical())
-
-form <- bf(ablk ~ Sector + Ikalk + Sukupuoli + kieli + sos + erikoisala + dg + conditions + season + raom + (1 ||FID)) 
-# rinnan toimivuus / nopeus:
-#n_cores <- parallel::detectCores(logical = FALSE) # fyysiset ytimet, tai detectCores() jos haluat hyperparallelisoinnin
-n_chains <- 12                        # chains ei voi olla pienempi kuin käytettävissä olevat cores käyttöön
-# (corejen määrä brm:ssä tarkoittaa montako chainia suoritetaan rinnakkain)
-dt <- as.data.frame(dt)
-set_cmdstan_path("/home/hansasja/Desktop/shared-directory/sd-tools/apps/R/lib/cmdstan-2.37.0")
-set.seed(12345)
-dt <- dt %>% slice_sample(prop = 1) 
-#multissa 12 chainiä
-fit <- brm(
-  formula = form,
-  data = dt,
-  family = categorical(),         # ei-ordinaalinen 3-luokkainen vaste
-  chains = 6,
-  cores  = 6, # käytä yhtä corea ketjua kohden -> maksimoi rinnakkaisuus
-  iter   = 1000,                  # voit kevyeen kokeiluun alentaa esim. 1000, mutta 2000 on suositus1
-  warmup = 500,
-  save_warmup = FALSE,
-  backend = "cmdstanr",           # nopeampi ja usein vakaa; poista jos et käytä cmdstanr:ia
-  control = list(adapt_delta = 0.95, max_treedepth = 12),
-  save_pars = save_pars(
-    group = FALSE,   # ei tallenneta r_FID[...]‑piirroksia
-    latent = FALSE,  # ei me/mi‑latenttien tallennusta
-    all = FALSE
-  )
-)
-saveRDS(fit, file = "brms_adj_fit.rds")
-
-
-# Esimerkki: 95 % kredibiliteettiväli (voit muuttaa probs-arvoja)
-fe <- fixef(fit, probs = c(0.025, 0.975)) %>% 
-  as.data.frame() %>% 
-  rownames_to_column("term") %>% 
-  as_tibble()
-
-or_tbl <- fe %>%
-  transmute(
-    term,
-    OR      = exp(Estimate),
-    CI_low  = exp(Q2.5),
-    CI_high = exp(Q97.5)
-  )
-
-
-View(or_tbl)
-summary(fit)
-
-result
-library(ggplot2)
-library(dplyr)
-library(forcats)
-
-dt<-read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
-#kaksiluokkainen guideline-concordance kategorisoi
-
-dt <- dt %>%
-  mutate(
-    suos = if_else(ablk %in% c("Amoxicillin", "Amoxicillin-clavulanic"),
-                   1, 0)
-  )
-
-dt <- dt %>%
-  mutate(conditions = if_else(is.na(conditions), 0, conditions))
-dt <- dt %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-dt <- dt %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-dt <- dt %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-
-dt$suos   <- factor(dt$suos)    # riippuva muuttuja: 2 tasoa
-dt$Sector <- factor(dt$Sector)  # kategorinen selittäjä 
-dt$FID    <- factor(dt$FID)     # ryhmittelytunniste: TÄMÄ pitää olla factor
-dt$season <-factor(dt$season)
-
-model <- glmmTMB(suos ~Sector + (1|FID), 
-                 data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(suos ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = dt, family = binomial(link = "logit"))
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glm(suos ~Sector,
-                 data = dt, family = binomial(link = "logit"))
-
-summary(model)
-OR <- exp(coef(model))
-OR
-
-CI <- confint(model)     # profiloitu CI log-odds-asteikolla
-OR_CI <- exp(CI)
-OR_CI
-
-
-model <- glm(suos ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg, 
-                 data = dt, family = binomial(link = "logit"))
-
-summary(model)
-OR <- exp(coef(model))
-OR
-
-CI <- confint(model)
-exp(CI)
-
-dt %>%
-  group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_suos = sum(suos== 1, na.rm = TRUE),
-    pct_suos = 100 * n_suos / n_total
-  ) #86,3 vs 87,7
-
-dt<-read_parquet("/media/volume/JaninaH/abdt_worstcase_sector.parquet")
-dt<-read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor.parquet")
-#kaksiluokkainen guideline-concordance kategorisoi
-dt <- dt %>%
-  mutate(
-    suos = if_else(ablk %in% c("Amoxicillin", "Amoxicillin-clavulanic"),
-                   1, 0)
-  )
-
-dt <- dt %>%
-  mutate(conditions = if_else(is.na(conditions), 0, conditions))
-dt <- dt %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-dt <- dt %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-dt <- dt %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-
-dt$suos   <- factor(dt$suos)    # riippuva muuttuja: 3 tasoa
-dt$Sector <- factor(dt$Sector)  # kategorinen selittäjä 
-dt$FID    <- factor(dt$FID)     # ryhmittelytunniste: TÄMÄ pitää olla factor
-dt$season <-factor(dt$season)
-dt$sos <-factor(dt$sos)
-table(dt$sos)
-sum(is.na(dt$sos))
-dt$kieli <-factor(dt$kieli)
-dt$conditions <- factor(dt$conditions)
-dt$erikoisala <-factor(dt$erikoisala)
-dt$Ikalk <-factor(dt$Ikalk)
-dt$dg <-factor(dt$dg)
-dt$Sukupuoli <-factor(dt$Sukupuoli)
-dt$raom <-factor(dt$raom)
-
-
-model <- glmmTMB(suos ~Sector + (1|FID), 
-                 data = dt, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(suos ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = dt, family = binomial(link = "logit"))
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-dt %>%
-  group_by(Sector) %>%
-  summarise(
-    n_total = n(),
-    n_suos = sum(suos== 1, na.rm = TRUE),
-    pct_suos = 100 * n_suos / n_total
-  ) #86,3 vs 87,7
-df<-read_parquet("/media/volume/JaninaH/strategy")
-table(df$Sector, df$abp)
-
-#----------------sectoral failures
-
-dt<-read_parquet("/media/volume/JaninaH/failuredata.parquet")
-dt <-dt %>%
-  group_by(FID, PVM, Sector) %>%
-  mutate(priority = case_when(
-    ab == 1 ~ 1,
-    grepl("^J01", ATC_CODE) ~ 2,
-    TRUE ~ 3
-  )) %>%
-  slice_min(priority, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  select(-priority)
-dt <- dt %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-table(dt$erikoisala)
-#80 na values to group ei
-dt <- dt %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-dt <- dt %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-
-sum(is.na(dt$erikoisala))
-sum(is.na(dt$FID))
-sum(is.na(dt$Sector))
-sum(is.na(dt$index_sector))
-sum(is.na(dt$sos))
-#transfer to factors
-dt$failed_visit<- factor(dt$failed_visit)
-dt$Sector <- factor(dt$Sector)  # kategorinen selittäjä 
-dt$FID    <- factor(dt$FID)     # ryhmittelytunniste: TÄMÄ pitää olla factor
-dt$season <-factor(dt$season)
-dt$sos <-factor(dt$sos)
-table(dt$sos)
-dt$kieli <-factor(dt$kieli)
-sum(is.na(dt$kieli))
-
-table(dt$sos)
-dt$conditions <- factor(dt$conditions)
-dt$erikoisala <-factor(dt$erikoisala)
-dt$Ikalk <-factor(dt$Ikalk)
-dt$dg <-factor(dt$dg)
-dt$sukupuoli <-factor(dt$sukupuoli)
-dt$raom <-factor(dt$raom)
-
-
-#-------first management_failures_by_index sector
-#täytyy laajentaa jos useampi index sectori jotta toistuvassa visiitissä molemmat sektorit merkitty aloitukseen
-df_expanded <- dt %>%
-  mutate(index_sector = case_when(
-    index_sector %in% c("1","2") ~ index_sector,
-    index_sector == "both" ~ "1,2"
-  )) %>%
   separate_rows(index_sector, sep = ",")
 
+# QC: kuinka usein visit-sector = index-sector
+# eli concordance (hyödyllinen sanity check)
 df_expanded %>%
   summarise(
     prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
   )
-#97,3%
 
+df_expanded %>% write_parquet("/media/volume/JaninaH/sec_doc_expanded")
 
-df_expanded %>%group_by(index_sector)%>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#1             502517      5518        1.10
-#2             239009      4333        1.81
+# =========================================================
+# DESCRIPTIVES (FAILURE7)
+# =========================================================
 
-
-
-df_expanded %>%group_by(index_sector)%>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(failed_visit == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total)
-
-#n_total n_failure pct_failure
-#<int>     <int>       <dbl>
-#  1  730747     49646        6.79
-
-dt%>%
+df_expanded %>%
   group_by(index_sector) %>%
   summarise(
     n_total = n(),
     n_failure = sum(failure7 == 1, na.rm = TRUE),
     pct_failure = 100 * n_failure / n_total
   )
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-#1             491738      5212        1.06
-#2              228230      4027        1.76
-#both           10779       306        2.84
-df_expanded%>%
-  group_by(index_sector) %>%
+
+# =========================================================
+# SENSITIVITY: WHOLE DATA (NO INDEX SECTOR)
+# =========================================================
+
+dt %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# sama ab failurelle
+dt %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# kaikki failures (visit-level)
+dt %>%
   summarise(
     n_total = n(),
     n_failure = sum(failed_visit == 1, na.rm = TRUE),
     pct_failure = 100 * n_failure / n_total
   )
-#index_sector n_total n_failure pct_failure
-#<chr>          <int>     <int>       <dbl>
-# 1             502517      5518        1.10
-# 2             239009      4333        1.81
-fail<-df_expanded%>%filter(failed_visit==1)
-fail %>%
+
+# =========================================================
+# DESCRIPTIVES BY SECTOR
+# =========================================================
+
+dt %>%
+  group_by(Sector) %>%
   summarise(
-    prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
+    n_total = n(),
+    n_failure = sum(failure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
   )
-#91,6%
+
+# =========================================================
+# GLMM MODELS – VISIT-LEVEL SECTOR
+# =========================================================
+
+# crude
+model <- glmmTMB(
+  failed_visit ~ Sector + (1|FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# adjusted
+model <- glmmTMB(
+  failed_visit ~ Sector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# =========================================================
+# INDEX-SECTOR ANALYSIS
+# =========================================================
 
 df_expanded %>%
   group_by(index_sector) %>%
@@ -731,109 +172,78 @@ df_expanded %>%
     n_total = n(),
     n_failure = sum(failed_visit == 1, na.rm = TRUE),
     pct_failure = 100 * n_failure / n_total
-  ) 
-#1           502517     25910        5.16
-#2            239009     25316       10.6 
+  )
 
-#management failures by glmmmtmb
-model<-glmmTMB(failed_visit~ index_sector + (1|FID), data = df_expanded, family = binomial(link = "logit"))
+# =========================================================
+# GLMM – INDEX SECTOR
+# =========================================================
+
+model <- glmmTMB(
+  failed_visit ~ index_sector + (1|FID),
+  data = df_expanded,
+  family = binomial(link = "logit")
+)
 summary(model)
-CI <- confint(model)
-exp(CI)
+exp(confint(model))
 
-
-model <- glmmTMB(failed_visit ~index_sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df_expanded, family = binomial(link = "logit"))  # 
-
+# adjusted
+model <- glmmTMB(
+  failed_visit ~ index_sector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = df_expanded,
+  family = binomial(link = "logit")
+)
 summary(model)
-CI <- confint(model)
-exp(CI)
+exp(confint(model))
 
-model<-glmmTMB(failure7~ index_sector + (1|FID), data = df_expanded, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
+# =========================================================
+# ANTIBIOTIC TREATMENT FAILURE
+# =========================================================
 
-model <- glmmTMB(failure7 ~index_sector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df_expanded, family = binomial(link = "logit"))  
-
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-#---------------------------------------------------------------
-#####-----abtreatment failures
+# HUOM: sama logiikka kuin index_sector mutta abindexsector
 
 df_expanded <- dt %>%
-  mutate(abindexsector= case_when(
-    abindexsector %in% c("1","2") ~ abindexsector,
-    abindexsector == "both" ~ "1,2"
-  )) %>%
+  mutate(
+    abindexsector = case_when(
+      abindexsector %in% c("1","2") ~ abindexsector,
+      abindexsector == "both" ~ "1,2"
+    )
+  ) %>%
   separate_rows(abindexsector, sep = ",")
 
-#filtteröidään pois käynnit joissa ei indexsektorissa abta(lähtisivät analyysissäkin pois)
-df<-df_expanded%>%filter(!abindexsector=="NA")
-#elakeläiset töissä ryhmään, pieni koko
-df <- df %>%
-  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
-table(dt$erikoisala)
-#80 na values to group ei
-df <- df %>%
-  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
-df <- df %>%
-  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
+# HUOM: tämä rivi on BUGI-altis:
+# filter(!abindexsector == "NA") → ei sama kuin !
+df <- df_expanded %>%
+  filter(abindexsector != "NA")
 
-
+# descriptives
 df %>%
   group_by(abindexsector) %>%
   summarise(
     n_total = n(),
     n_failure = sum(abfailure == 1, na.rm = TRUE),
     pct_failure = 100 * n_failure / n_total
-  ) 
-#abindexsector n_total n_failure pct_failure
-#<chr>           <int>     <int>       <dbl>
-# 1              394836     21641        5.48
-# 2              175826     20883       11.9 
-#
+  )
 
+# =========================================================
+# GLMM – AB FAILURE
+# =========================================================
 
-df %>%
-  group_by(abindexsector) %>%
-  summarise(
-    n_total = n(),
-    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
-    pct_failure = 100 * n_failure / n_total
-  ) 
-#abindexsector n_total n_failure pct_failure
-#<chr>           <int>     <int>       <dbl>
-# 1              394836      4224        1.07
-#2              175826      3363        1.91
-
-
-model<-glmmTMB(abfailure ~ abindexsector + (1|FID), data = df, family = binomial(link = "logit"))
+model <- glmmTMB(
+  abfailure ~ abindexsector + (1|FID),
+  data = df,
+  family = binomial(link = "logit")
+)
 summary(model)
-CI <- confint(model)
-exp(CI)
+exp(confint(model))
 
-model <- glmmTMB(abfailure ~abindexsector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df, family = binomial(link = "logit"))
+model <- glmmTMB(
+  abfailure ~ abindexsector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = df,
+  family = binomial(link = "logit")
+)
 summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abfailure7 ~ abindexsector + (1|FID),data = df, family = binomial(link = "logit"))
-
-summary(model)
-CI <- confint(model)
-exp(CI)
-
-model <- glmmTMB(abfailure7 ~abindexsector + Sukupuoli + Ikalk + kieli + conditions + 
-                   erikoisala + sos + season + raom + dg + (1 | FID), 
-                 data = df, family = binomial(link = "logit"))
-summary(model)
-CI <- confint(model)
-exp(CI)
+exp(confint(model))
