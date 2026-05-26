@@ -1,0 +1,210 @@
+
+# ---------------------------------------------------------
+# Sensitivity analyses
+# ---------------------------------------------------------
+# To assess robustness, we varied:
+# 1) the time window for linking prescriptions to visits (0, 2, 7 days)
+# 2) the episode definition window (14, 30, 45 days)
+#
+# For each scenario:
+# - prescriptions were assigned to the nearest visit
+# - visits were grouped into episodes
+# - management failure was defined as repeat visit with antibiotic use
+# - index sector was defined at episode level
+
+# =========================================================
+# SENSITIVITY ANALYSES: LINKAGE WINDOWS & EPISODE DEFINITIONS
+# =========================================================
+
+library(dplyr)
+library(lubridate)
+library(data.table)
+library(nanoparquet)
+
+# ---------------------------------------------------------
+# 1. LOAD DATA
+# ---------------------------------------------------------
+
+res  <- read_parquet("/media/volume/JaninaH/fidien_kaikki_reseptit.parquet")
+cdf1 <- read_parquet("/media/volume/JaninaH/visits.parquet")  # visit data
+
+# ---------------------------------------------------------
+# 2. PRESCRIPTION–VISIT LINKAGE WINDOWS
+# ---------------------------------------------------------
+
+# Function: link prescriptions to visits within given window
+link_prescriptions <- function(days_window) {
+  
+  candidates <- res %>%
+    inner_join(cdf1, by = "FID") %>%
+    filter(DATE_PK >= PVM & DATE_PK <= PVM + days(days_window)) %>%
+    mutate(diff = as.numeric(DATE_PK - PVM))
+  
+  best_matches <- candidates %>%
+    arrange(FID, DATE_PK, diff) %>%
+    group_by(FID, DATE_PK, row_id = row_number()) %>%
+    slice(1) %>%  # assign each prescription to closest visit
+    ungroup()
+  
+  cdf1 %>%
+    left_join(best_matches, by = c("FID", "PVM"))
+}
+
+# Three linkage strategies
+same_day <- link_prescriptions(0)
+window_2d <- link_prescriptions(2)   # PRIMARY ANALYSIS
+window_7d <- link_prescriptions(7)
+
+# ---------------------------------------------------------
+# 3. SECTOR DEFINITION
+# ---------------------------------------------------------
+
+assign_sector <- function(df) {
+  df %>%
+    mutate(
+      Sector = case_when(
+        !is.na(SECTOR) ~ as.numeric(SECTOR),
+        grepl("^95|^6", PALTU) ~ 2,
+        TRUE ~ 1
+      )
+    )
+}
+
+window_2d <- assign_sector(window_2d)
+
+# ---------------------------------------------------------
+# 4. DISPENSATION DATA
+# ---------------------------------------------------------
+
+df_all <- read_parquet("/media/volume/JaninaH/fidien_kaikki_toimitukset.parquet")
+
+df_all$ab <- ifelse(grepl("^J01", df_all$ATC5_KOODI), 1, 0)
+
+ct <- window_2d %>%
+  left_join(df_all,
+    by = c("FID", "PVM"="LAAKEMAARAYS_KIRJOITUS_PV",
+           "ATC_CODE"="ATC5_KOODI")
+  ) %>%
+  mutate(
+    abp = ifelse(grepl("^J01", ATC_CODE), 1, 0),
+    ab  = ifelse(is.na(ab), 0, ab)
+  )
+
+# ---------------------------------------------------------
+# 5. EPISODE DEFINITIONS (SENSITIVITY)
+# ---------------------------------------------------------
+
+build_episodes <- function(df, window_days) {
+  
+  df <- df %>%
+    arrange(FID, PVM) %>%
+    group_by(FID) %>%
+    mutate(
+      episode = {
+        id <- 0L
+        start <- NA
+        out <- integer(n())
+        
+        for (i in seq_along(PVM)) {
+          if (is.na(start) || as.numeric(PVM[i] - start) > window_days) {
+            id <- id + 1L
+            start <- PVM[i]
+          }
+          out[i] <- id
+        }
+        out
+      }
+    ) %>%
+    ungroup()
+  
+  return(df)
+}
+
+# Primary + sensitivity
+ep30 <- build_episodes(ct, 30)  # primary
+ep14 <- build_episodes(ct, 14)
+ep45 <- build_episodes(ct, 45)
+
+# ---------------------------------------------------------
+# 6. UNIQ VISIT + FAILURE DEFINITION
+# ---------------------------------------------------------
+
+process_visits <- function(df) {
+  
+  # select single row per visit (priority)
+  uq <- df %>%
+    group_by(FID, PVM, Sector, FD_HASH_Rekisterointinro) %>%
+    mutate(
+      prio = case_when(
+        ab == 1 ~ 1,
+        grepl("^J01", ATC_CODE) ~ 2,
+        TRUE ~ 3
+      )
+    ) %>%
+    slice_min(prio, n = 1) %>%
+    ungroup()
+  
+  # failure = repeat visit + antibiotic
+  uq <- uq %>%
+    group_by(FID, episode) %>%
+    arrange(PVM, .by_group = TRUE) %>%
+    mutate(
+      is_repetative = if_else(row_number() == 1, 0, 1),
+      failed_visit = if_else(is_repetative == 1 & ab == 1, 1, 0)
+    ) %>%
+    ungroup()
+  
+  # index sector
+  uq <- uq %>%
+    group_by(FID, episode) %>%
+    mutate(
+      sectors = list(unique(Sector[!is.na(Sector)])),
+      index_sector = map_chr(sectors, ~ {
+        if (length(.x) == 1) as.character(.x)
+        else "both"
+      })
+    ) %>%
+    ungroup()
+  
+  # expand both → 1,2
+  uq %>%
+    mutate(index_sector = if_else(index_sector == "both", "1,2", index_sector)) %>%
+    separate_rows(index_sector, sep = ",")
+}
+
+final30 <- process_visits(ep30)
+final14 <- process_visits(ep14)
+final45 <- process_visits(ep45)
+
+# ---------------------------------------------------------
+# 7. DESCRIPTIVES (FOR REPORTING)
+# ---------------------------------------------------------
+
+summarise_failure <- function(df) {
+  df %>%
+    group_by(index_sector) %>%
+    summarise(
+      n_total = n(),
+      n_fail  = sum(failed_visit == 1),
+      pct     = 100 * n_fail / n_total
+    )
+}
+
+res30 <- summarise_failure(final30)
+res14 <- summarise_failure(final14)
+res45 <- summarise_failure(final45)
+
+# ---------------------------------------------------------
+# 8. MODELS (DETAILS REPORTED IN MAIN ANALYSIS)
+# ---------------------------------------------------------
+
+library(glmmTMB)
+
+model30 <- glmmTMB(
+  failed_visit ~ index_sector + (1|FID),
+  data = final30,
+  family = binomial
+)
+
+summary(model30)
+exp(confint(model30))
