@@ -1,6 +1,6 @@
-## ============================================================================
-## SECTION 7: Antibiotic Prescriptions (Reseptikeskus / Prescription Centre)
-## ============================================================================
+## ============================================================================================================================
+## SECTION 7: Antibiotic Prescriptions (Reseptikeskus / Prescription Centre; maintained by Kela / Social Insurance Institution)
+## ============================================================================================================================
 
 # --- 7.1 Prepare year-specific patient ID sets for memory-efficient
 #         chunked reading of large prescription files -------------------------
@@ -28,7 +28,7 @@ id22 <- unique(df1_filtered22$FID)
 #         study patients. Repeat this block for each year (2017–2022),
 #         updating csv_name and the id## reference accordingly. ---------------
 
-csv_name <- "/media/volume/Data_20260319//Reseptikeskus//FD_2698_166_522_2023_Laakemaaraykset_2017.csv"
+csv_name <- "/prescriptions/Reseptikeskus/Laakemaaraykset_2017.csv" #Update year for each iteration 2017-2022 
 
 results      <- list()       # Initialise list to collect filtered chunks
 chunk_size   <- 3000000      # Process 3,000,000 rows per chunk
@@ -67,8 +67,8 @@ res <- bind_rows(o17, o18, o19, o20, o21, o22)
 nrow(res)
 
 # Save combined prescription data
-res %>% write_parquet(paste0("/media/volume/JaninaH/", "fidien_kaikki_reseptit.parquet"))
-res <- read_parquet(paste0("/media/volume/JaninaH/", "fidien_kaikki_reseptit.parquet"))
+res %>% write_parquet(paste0("/JaninaH/", "fidien_kaikki_reseptit.parquet"))
+res <- read_parquet(paste0("/JaninaH/", "fidien_kaikki_reseptit.parquet"))
 
 
 # --- 7.3 Link prescriptions to visits using temporal windows -----------------
@@ -76,9 +76,9 @@ res <- read_parquet(paste0("/media/volume/JaninaH/", "fidien_kaikki_reseptit.par
 # Window 0: Same-day prescriptions (sensitivity check)
 same_day <- cdf1 %>%
   left_join(res, by = c("FID", "PVM" = "DATE_PK"))  # n = 1,169,854
-same_day %>% write_parquet(paste0("/media/volume/JaninaH/", "reseptien_yhdistys_sama_pv.parquet"))
+same_day %>% write_parquet(paste0("/JaninaH/", "reseptien_yhdistys_sama_pv.parquet"))
 
-# Window 7 days: Prescriptions issued from visit date up to 7 days after
+# Window 7 days: Prescriptions issued from visit date up to 7 days after (sensitivity check)
 candidates <- res %>%
   inner_join(cdf1, by = "FID") %>%
   filter(DATE_PK >= PVM & DATE_PK <= PVM + days(7)) %>%
@@ -95,7 +95,7 @@ best_matches <- candidates %>%
 
 one_week <- cdf1 %>%
   left_join(best_matches, by = c("FID", "PVM"))  # n = 1,295,402
-one_week %>% write_parquet(paste0("/media/volume/JaninaH/", "reseptien_yhdistys_viikko.parquet"))
+one_week %>% write_parquet(paste0("/JaninaH/", "reseptien_yhdistys_viikko.parquet"))
 
 
 # Window 2 days (primary analysis window): Prescriptions issued on the
@@ -115,8 +115,8 @@ best_matches <- candidates %>%
 
 final <- cdf1 %>%
   left_join(best_matches, by = c("FID", "PVM"))  # n = 1,193,571
-final %>% write_parquet(paste0("/media/volume/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
-final <- read_parquet(paste0("/media/volume/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
+final %>% write_parquet(paste0("/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
+final <- read_parquet(paste0("/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
 
 # Number of prescriptions issued 1–2 days after the visit
 sum(final$DATE_PK != final$PVM, na.rm = TRUE)  # 47,475
@@ -136,7 +136,7 @@ final <- final %>%
   )
 
 # Assign care sector:
-#   - Use prescription SECTOR field if available (most precise)
+#   - Use prescription SECTOR field if available (most relevant when investigating prescribing patterns)
 #   - Infer from service provider code (PALTU): 95xxx or 6xxx → private (2)
 #   - Default → public (1)
 dt <- final %>%
@@ -148,17 +148,17 @@ dt <- final %>%
     )
   )
 
-dt %>% write_parquet(paste0("/media/volume/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
-dt <- read_parquet(paste0("/media/volume/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
+dt %>% write_parquet(paste0("/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
+dt <- read_parquet(paste0("/JaninaH/", "2pv_yhdistetyt_reseptit.parquet"))
 
 
-## ============================================================================
-## SECTION 8: Antibiotic Dispensations (Kela / Social Insurance Institution)
-## ============================================================================
+## ===========================================================================================================
+## SECTION 8: Antibiotic Dispensations (Prescription Centre)
+## ============================================================================================================
 
 # --- 8.1 Prepare year-specific patient ID sets (same approach as Section 7) --
 
-list.files("/media/volume/Data_THL_2698_14.02.00_2023_pk1_uudelleen/Kela/")
+list.files("prescription_centre/Kela/")
 
 df1_filtered17 <- dt %>% filter(format(PVM, "%Y") == "2017"); id17 <- unique(df1_filtered17$FID)
 df1_filtered18 <- dt %>% filter(format(PVM, "%Y") == "2018"); id18 <- unique(df1_filtered18$FID)
@@ -170,13 +170,13 @@ df1_filtered22 <- dt %>% filter(format(PVM, "%Y") == "2022"); id22 <- unique(df1
 
 # --- 8.2 Read Kela dispensation data in chunks (repeat for each year) --------
 
-csv_name <- "/media/volume/Data_20260319/Kela/FD_2698_165_522_2023_LAAKEOSTOT_2022.csv"  # Update year
+csv_name <- "prescription_centre/Kela/dispensations_LAAKEOSTOT_2017.csv"  # Update year for each ieration 2017-2022
 
 results    <- list()
 chunk_size <- 3000000
 
 chunk_handler <- function(df, pos) {
-  df_filtered <- df %>% filter(FID %in% id22)  # Update year
+  df_filtered <- df %>% filter(FID %in% id17)  # Update year
   results <<- append(results, list(df_filtered))
 }
 
@@ -200,13 +200,13 @@ read_delim_chunked(
 df_combined <- bind_rows(results)
 df2 <- df_combined %>%
   mutate(LAAKEMAARAYS_KIRJOITUS_PV = as.Date(LAAKEMAARAYS_KIRJOITUS_PV, format = "%Y-%m-%d"))
-o22 <- df2
-# Rename to o21, o20, ... o17 when repeating for earlier years
+o17 <- df2
+# Rename to o18, o19, ... o22 when repeating for later years
 
-# Combine all dispensation years
+# Combine all dispensations per years
 df_all <- bind_rows(o17, o18, o19, o20, o21, o22)
-df_all %>% write_parquet(paste0("/media/volume/JaninaH/", "fidien_kaikki_toimitukset.parquet"))
-df_all <- read_parquet(paste0("/media/volume/JaninaH/", "fidien_kaikki_toimitukset.parquet"))
+df_all %>% write_parquet(paste0("/JaninaH/", "fidien_kaikki_toimitukset.parquet"))
+df_all <- read_parquet(paste0("/JaninaH/", "fidien_kaikki_toimitukset.parquet"))
 
 
 # --- 8.3 Merge dispensation data with visit/prescription dataset -------------
@@ -260,7 +260,7 @@ table(data_clean$abp)
 table(data_clean$ab)
 table(data_clean$ab, data_clean$Sector)
 
-data_clean %>% write_parquet(paste0("/media/volume/JaninaH/", "toimitukset_datassa.parquet"))
-df <- read_parquet(paste0("/media/volume/JaninaH/", "toimitukset_datassa.parquet"))
+data_clean %>% write_parquet(paste0("/JaninaH/", "toimitukset_datassa.parquet"))
+df <- read_parquet(paste0("/JaninaH/", "toimitukset_datassa.parquet"))
 
 
