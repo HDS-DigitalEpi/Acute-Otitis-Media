@@ -5,25 +5,25 @@
 
 # --- 4.1 Read and filter HILMO procedure files for DCA20 ---------------------
 
-ht1 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_TOIMENP_1.csv")
+ht1 <- fread("procedures_HILMO_H_TOIMENP_1.csv")
 filtered_1 <- subset(ht1, grepl("DCA20", TOIMP, ignore.case = TRUE))
 
-ht2 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_TOIMENP_2.csv")
+ht2 <- fread("procedures_HILMO_H_TOIMENP_2.csv")
 filtered_2 <- subset(ht2, grepl("DCA20", TOIMP, ignore.case = TRUE))
 
-ht3 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_TOIMENP_3.csv")
+ht3 <- fread("procedures_HILMO_H_TOIMENP_3.csv")
 filtered_3 <- subset(ht3, grepl("DCA20", TOIMP, ignore.case = TRUE))
 
-ht4 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_TOIMENP_4.csv")
+ht4 <- fread("procedures_HILMO_H_TOIMENP_4.csv")
 filtered_4 <- subset(ht4, grepl("DCA20", TOIMP, ignore.case = TRUE))
 
-ht5 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_TOIMENP_5.csv")
+ht5 <- fread("procedures_HILMO_H_TOIMENP_5.csv")
 filtered_5 <- subset(ht5, grepl("DCA20", TOIMP, ignore.case = TRUE))
 
 # Combine all DCA20 procedure records
 toimenpiteet <- bind_rows(filtered_1, filtered_2, filtered_3, filtered_4, filtered_5)
-toimenpiteet %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_putkitukset"))
-toimenpiteet <- read_parquet(paste0("/media/volume/JaninaH/", "hilmo_putkitukset"))
+toimenpiteet %>% write_parquet(paste0("/JaninaH/", "hilmo_putkitukset"))
+toimenpiteet <- read_parquet(paste0("/JaninaH/", "hilmo_putkitukset"))
 
 
 # --- 4.2 Link procedure records with visit data and apply age/date filters ---
@@ -79,8 +79,8 @@ hilmot <- hilmot %>%
 sum(is.na(hilmot$KOODI))  # 1,564 rows without ICD-10 code (from procedure-only records)
 
 # Save HILMO dataset with procedures
-hilmot %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_myos_tp.parquet"))
-hilmot <- read_parquet("/media/volume/JaninaH/hilmo_myos_tp.parquet")
+hilmot %>% write_parquet(paste0("/JaninaH/", "hilmo_myos_tp.parquet"))
+hilmot <- read_parquet("/JaninaH/hilmo_myos_tp.parquet")
 
 
 ## ============================================================================
@@ -88,26 +88,26 @@ hilmot <- read_parquet("/media/volume/JaninaH/hilmo_myos_tp.parquet")
 ##            Procedure codes: DCA20 and SPAT1019
 ## ============================================================================
 
-# --- 5.1 Read and filter AvoHILMO procedure files for DCA20 or SPAT1019 -----
+# --- 5.1 Read and filter AvoHILMO procedure files for DCA20 or SPAT1019 (SPAT1019 used only in primary healthcare) -----
 
-aht1 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_TOIMENPITEET_1.csv")
+aht1 <- fread("procedures_AvoHILMO_AH_TOIMENPITEET_1.csv")
 filtered_1 <- subset(aht1, grepl("DCA20|1019", TOIMENPIDE, ignore.case = TRUE))
 
-aht2 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_TOIMENPITEET_2.csv")
+aht2 <- fread("procedures_AvoHILMO_AH_TOIMENPITEET_2.csv")
 filtered_2 <- subset(aht2, grepl("DCA20|1019", TOIMENPIDE, ignore.case = TRUE))
 
-aht3 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_TOIMENPITEET_3.csv")
+aht3 <- fread("procedures_AvoHILMO_AH_TOIMENPITEET_3.csv")
 filtered_3 <- subset(aht3, grepl("DCA20|1019", TOIMENPIDE, ignore.case = TRUE))
 
-aht4 <- fread("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_TOIMENPITEET_4.csv")
+aht4 <- fread("procedures_AvoHILMO_AH_TOIMENPITEET_4.csv")
 filtered_4 <- subset(aht4, grepl("DCA20|1019", TOIMENPIDE, ignore.case = TRUE))
 
 # Combine all AvoHILMO procedure records
 toimenpiteet <- bind_rows(filtered_1, filtered_2, filtered_3, filtered_4)
 toimenpiteet$AVOHILMOID <- as.character(toimenpiteet$AVOHILMOID)
 
-toimenpiteet %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_putkitukset"))
-toimenpiteet <- read_parquet(paste0("/media/volume/JaninaH/", "avohilmo_putkitukset"))
+toimenpiteet %>% write_parquet(paste0("/JaninaH/", "avohilmo_putkitukset"))
+toimenpiteet <- read_parquet(paste0("/JaninaH/", "avohilmo_putkitukset"))
 
 # Merge AvoHILMO diagnosis data with procedure data on patient and visit IDs
 ahs <- left_join(avot, toimenpiteet,
@@ -124,8 +124,8 @@ ahs$PALVELUNTUOTTAJA <- as.character(ahs$PALVELUNTUOTTAJA)
 ahs["data"]    <- "AH"
 hilmot["data"] <- "H"
 
-ahs %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_myos_tp.parquet"))
-ahs <- read_parquet(paste0("/media/volume/JaninaH/", "avohilmo_myos_tp.parquet"))
+ahs %>% write_parquet(paste0("/JaninaH/", "avohilmo_myos_tp.parquet"))
+ahs <- read_parquet(paste0("/JaninaH/", "avohilmo_myos_tp.parquet"))
 
 # Harmonise column names across AvoHILMO and HILMO for combining
 colnames(ahs)[3]  <- "PALTU"          # Service provider
@@ -154,7 +154,7 @@ sum(is.na(ahs$KOODI))
 
 # Combine HILMO and AvoHILMO into a single dataset
 avoh <- bind_rows(hilmot, ahs)
-avoh %>% write_parquet(paste0("/media/volume/JaninaH/", "avojahilmo_tp.parquet"))
-cdf1 <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmo_tp.parquet"))
+avoh %>% write_parquet(paste0("/JaninaH/", "avojahilmo_tp.parquet"))
+cdf1 <- read_parquet(paste0("/JaninaH/", "avojahilmo_tp.parquet"))
 
 
