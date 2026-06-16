@@ -2,7 +2,7 @@
 # GUIDELINE ADHERENCE (binary outcome)
 # =========================================================
 
-dt <- read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
+dt <- read_parquet("/JaninaH/abdt_worstcase_doctor_sector.parquet")
 
 # dichotomic outcome
 dt <- dt %>%
@@ -17,7 +17,7 @@ dt <- dt %>%
 # 0 = non-first-line
 
 # =========================================================
-# CLEANING
+# CLEANING 
 # =========================================================
 
 dt <- dt %>%
@@ -81,7 +81,6 @@ exp(confint(model))
 # COMPARISON WITH NON-MIXED MODEL
 # =========================================================
 
-# HUOM: tämä ignoraa FID → vertailu random effectin vaikutukseen
 
 model <- glm(
   suos ~ Sector,
@@ -93,6 +92,7 @@ summary(model)
 exp(coef(model))
 exp(confint(model))
 
+#AIC values better in mixed-effects model
 # =========================================================
 # DESCRIPTIVES
 # =========================================================

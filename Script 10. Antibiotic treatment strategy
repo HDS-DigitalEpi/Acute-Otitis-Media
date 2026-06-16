@@ -2,7 +2,7 @@
 # ANTIBIOTIC TREATMENT STRATEGY
 # =========================================================
 
-dt <- read_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
+dt <- read_parquet("/JaninaH/abdt_worstcase_doctor_sector.parquet")
 
 # =========================================================
 # CLEANING
@@ -25,12 +25,9 @@ dt <- dt %>%
 # =========================================================
 
 dt$ablk   <- factor(dt$ablk)
-
-
 dt$Sector <- factor(dt$Sector)
 dt$FID    <- factor(dt$FID)   # random intercept
 dt$season <- factor(dt$season)
-
 dt$sos <- factor(dt$sos)
 dt$kieli <- factor(dt$kieli)
 dt$conditions <- factor(dt$conditions)
@@ -53,16 +50,10 @@ dt <- dt %>% filter(abp == 1)
 
 dt <- dt[dt$Sector != 3, ]
 
-# NA check
-dt[!complete.cases(dt), ]
+
 
 # =========================================================
-# RANDOMIZATION (MCMC stability)
-# =========================================================
 
-# 🔑 tärkeä isoissa aineistoissa
-set.seed(123)
-dt <- dt[sample(nrow(dt)), ]
 
 # =========================================================
 # MODEL SPECIFICATION
@@ -72,8 +63,10 @@ dt <- dt[sample(nrow(dt)), ]
 form <- bf(ablk ~ Sector + (1 || FID))
 
 # =========================================================
-# FULL MODEL
+# FULL MODEL 
 # =========================================================
+#covariates: sector, age, sex, native language, occupational status of a parent, physician specialty,
+#season, occurence of selected chronical conditions and recurrent AOM within a year before visit
 
 form <- bf(
   ablk ~ Sector + Ikalk + Sukupuoli + kieli + sos +
@@ -88,16 +81,14 @@ form <- bf(
 fit <- brm(
   formula = form,
   data = dt,
-  family = categorical(),  # 🔑 multinomial (non-ordinal)
-  
-  chains = 6,
-  cores  = 6,
-  
+  family = categorical(),  
+  chains = 4,
+  cores  = 4,
+  threadind = 3, #12 cores are used simultanously
+  priors = prior,
   iter   = 1000,
   warmup = 500,
-  
-  backend = "cmdstanr",   # nopeampi kuin rstan
-  
+  backend = "cmdstanr",  
   control = list(
     adapt_delta = 0.95,
     max_treedepth = 12

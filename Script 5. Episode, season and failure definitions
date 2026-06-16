@@ -1,7 +1,7 @@
 set.seed(4)
 
 # Set working directory and shared library path
-setwd("/media/volume/JaninaH/codes/")
+setwd(/JaninaH/codes/")
 .libPaths("/shared-directory/sd-tools/apps/R/lib/")
 
 # Load required libraries
@@ -18,7 +18,7 @@ library(stringr)       # String operations
 ## ============================================================================
 
 # Load main analysis dataset (includes all visits, prescriptions, comorbidities)
-dt <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_26_4.parquet"))
+dt <- read_parquet(paste0("/JaninaH/", "avojahilmop_26_4.parquet"))
 
 # --- 16.1 Exclude visits associated with tympanostomy tube insertion ----------
 #
@@ -95,15 +95,15 @@ dt <- dt %>%
   ungroup()
 
 # Binary flag: 0 = index (first) visit in episode, 1 = repeat visit
-dt$is_repetative <- ifelse(grepl("1", dt$visit_order_in_period), 0, 1)
 
+df$is_repetative <-df$ifelse(visit_order_in_period==1,0,1)
 
 ## ============================================================================
 ## SECTION 17: Merge rAOM Status, Age Groups, and Comorbidity Flags
 ## ============================================================================
 
 # Load pre-computed rAOM (recurrent acute otitis media) status from history data
-korvat <- read_parquet("/media/volume/JaninaH/korva_historia")
+korvat <- read_parquet(/JaninaH/korva_historia")
 korvat <- korvat %>% select(FID, PVM, raom)
 
 # Merge rAOM flag into the main dataset by patient ID and visit date
@@ -174,7 +174,7 @@ dt <- dt %>%
   select(-month)   # Remove intermediate month column
 
 # Save base analysis dataset
-dt %>% write_parquet("/media/volume/JaninaH/perusdt")
+dt %>% write_parquet("/JaninaH/perusdt")
 
 
 ## ============================================================================
@@ -192,7 +192,7 @@ dt %>% write_parquet("/media/volume/JaninaH/perusdt")
 ##              99 = No ab (default / unknown)
 ## ============================================================================
 
-dt <- read_parquet("/media/volume/JaninaH/perusdt")
+dt <- read_parquet(/JaninaH/perusdt")
 
 DT <- as.data.table(dt)
 DT[, PVM := as.IDate(PVM)]
@@ -219,7 +219,7 @@ prop.table(table(df_ws$Sector, df_ws$ablk), margin = 1) * 100
 # Sector 2 (private): ~29% Amoxicillin, ~23% Amoxicillin-clav, ~35% No ab, ~12% other
 # n = 720,669 rows
 
-df_ws %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_sector.parquet")
+df_ws %>% write_parquet("/JaninaH/perusdt_worstcase_sector.parquet")
 
 
 # --- Scenario B: Worst case per prescribing physician and patient-visit ------
@@ -234,7 +234,7 @@ df_wd <- DT[
 prop.table(table(df_wd$Sector, df_wd$ablk), margin = 1) * 100
 # n = 735,606 rows
 
-df_wd %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_doctor.parquet")
+df_wd %>% write_parquet(/JaninaH/perusdt_worstcase_doctor.parquet")
 
 
 # --- Scenario C: Worst case per physician, sector, and patient-visit ---------
@@ -249,7 +249,7 @@ df_wds <- DT[
 prop.table(table(df_wds$Sector, df_wds$ablk), margin = 1) * 100
 # n = 737,322 rows
 
-df_wds %>% write_parquet("/media/volume/JaninaH/perusdt_worstcase_doctor_sector.parquet")
+df_wds %>% write_parquet("/JaninaH/perusdt_worstcase_doctor_sector.parquet")
 
 # Total unique patients across scenarios
 fids <- unique(df_ws$FID)
@@ -267,12 +267,12 @@ length(fids)  # n = 295,064
 # --- Scenario A: Sector-level worst case -------------------------------------
 
 dws <- df_ws %>% filter(is_repetative == 0)         # Index visits only (n = 582,679)
-dws %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_sector.parquet")
+dws %>% write_parquet(/JaninaH/strategydt_worstcase_sector.parquet")
 
 # Restrict to visits with an antibiotic prescribed (abp == 1) for
 # guideline adherence analysis
 dws <- dws %>% filter(abp == 1)                     # n = 457,539
-dws %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_sector.parquet")
+dws %>% write_parquet(/JaninaH/abdt_worstcase_sector.parquet")
 
 prop.table(table(dws$Sector, dws$ablk), margin = 1) * 100
 # Public:  ~79% Amoxicillin, ~8% Amoxicillin-clav, ~12% other
@@ -282,21 +282,21 @@ prop.table(table(dws$Sector, dws$ablk), margin = 1) * 100
 # --- Scenario B: Physician-level worst case ----------------------------------
 
 dwd <- df_wd %>% filter(is_repetative == 0)
-dwd %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor.parquet")
+dwd %>% write_parquet(/JaninaH/strategydt_worstcase_doctor.parquet")
 
 dwd <- dwd %>% filter(abp == 1)
 prop.table(table(dwd$Sector, dwd$ablk), margin = 1) * 100
-dwd %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_doctor.parquet")
+dwd %>% write_parquet(/JaninaH/abdt_worstcase_doctor.parquet")
 
 
 # --- Scenario C: Physician + sector worst case -------------------------------
 
 dwds <- df_wds %>% filter(is_repetative == 0)
-dwds %>% write_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor_sector.parquet")
+dwds %>% write_parquet(/JaninaH/strategydt_worstcase_doctor_sector.parquet")
 
 dwds <- dwds %>% filter(abp == 1)
 prop.table(table(dwds$Sector, dwds$ablk), margin = 1) * 100
-dwds %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parquet")
+dwds %>% write_parquet(/JaninaH/abdt_worstcase_doctor_sector.parquet")
 
 
 ## ============================================================================
@@ -309,7 +309,7 @@ dwds %>% write_parquet("/media/volume/JaninaH/abdt_worstcase_doctor_sector.parqu
 ##             (failure7/abfailure7) to capture early treatment failures.
 ## ============================================================================
 
-dt <- read_parquet("/media/volume/JaninaH/perusdt")
+dt <- read_parquet(/JaninaH/perusdt")
 
 # --- 21.1 Deduplicate visits retaining the antibiotic-dispensed row ----------
 #
@@ -330,14 +330,14 @@ dt <- dt %>%
   ungroup()
 
 # Sectoral deduplication only (sector × patient × date)
-dt <- dt %>%
-  group_by(FID, PVM, Sector) %>%
-  mutate(has_J01 = any(grepl("^J01", ATC_CODE))) %>%
-  filter(
-    (has_J01 & grepl("^J01", ATC_CODE)) |
-      (!has_J01 & row_number() == 1)
-  ) %>%
-  ungroup()
+#dt <- dt %>%
+#  group_by(FID, PVM, Sector) %>%
+#  mutate(has_J01 = any(grepl("^J01", ATC_CODE))) %>%
+#  filter(
+#    (has_J01 & grepl("^J01", ATC_CODE)) |
+#      (!has_J01 & row_number() == 1)
+#  ) %>%
+#  ungroup()
 
 # Apply study period filter
 dt <- dt %>%
@@ -360,16 +360,16 @@ uq <- dt %>%
   select(-priority)
 
 # Sectoral only: one row per FID + PVM + Sector
-uq <- dt %>%
-  group_by(FID, PVM, Sector) %>%
-  mutate(priority = case_when(
-    ab == 1                  ~ 1,
-    grepl("^J01", ATC_CODE)  ~ 2,
-    TRUE                     ~ 3
-  )) %>%
-  slice_min(priority, n = 1, with_ties = FALSE) %>%
-  ungroup() %>%
-  select(-priority)
+#uq <- dt %>%
+#  group_by(FID, PVM, Sector) %>%
+#  mutate(priority = case_when(
+#    ab == 1                  ~ 1,
+#    grepl("^J01", ATC_CODE)  ~ 2,
+#    TRUE                     ~ 3
+#  )) %>%
+#  slice_min(priority, n = 1, with_ties = FALSE) %>%
+#  ungroup() %>%
+# select(-priority)
 
 
 # --- 21.3 Calculate treatment failure flags ----------------------------------
@@ -542,7 +542,7 @@ df <- data %>% select(-start_sectors)
 # --- Save final failure datasets by deduplication scenario -------------------
 
 # Sectoral deduplication
-df %>% write_parquet("/media/volume/JaninaH/failuredata_sectoral.parquet")
+df %>% write_parquet(/JaninaH/failuredata_sectoral.parquet")
 
 # Doctoral + sectoral deduplication
-df %>% write_parquet("/media/volume/JaninaH/failuredata_doctor_sectoral.parquet")
+df %>% write_parquet(/JaninaH/failuredata_doctor_sectoral.parquet")

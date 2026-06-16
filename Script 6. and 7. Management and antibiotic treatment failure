@@ -2,8 +2,8 @@
 # MIXED EFFECTS FOR MANAGEMENT AND ANTIBIOTIC TREATMENT FAILURE
 # =========================================================
 
-setwd("/media/volume/JaninaH/codes/")
-.libPaths("/shared-directory/sd-tools/apps/R/lib/")
+setwd("/JaninaH/codes/")
+.libPaths("/shared-directory/apps/R/lib/")
 
 # --- Load libraries ---
 library(nanoparquet)
@@ -30,8 +30,8 @@ set_cmdstan_path("/home/hansasja/Desktop/shared-directory/cmdstan-2.37.0/")
 # DATA IMPORT
 # =========================================================
 
-# HUOM: ylikirjoitat dt heti seuraavalla rivillä
-dt <- read_parquet("/media/volume/JaninaH/failuredata_doctor_sectoral.parquet")
+# Read data where one doctor can be involved in both sectors at the same day
+dt <- read_parquet("/JaninaH/failuredata_doctor_sectoral.parquet")
 
 # Summary check
 table(dt$erikoisala)
@@ -59,7 +59,7 @@ sum(is.na(dt$sos))
 
 dt$failed_visit <- factor(dt$failed_visit)
 dt$Sector <- factor(dt$Sector)
-dt$FID    <- factor(dt$FID)     # RANDOM EFFECT → tärkeä!
+dt$FID    <- factor(dt$FID)     
 dt$season <- factor(dt$season)
 dt$kieli  <- factor(dt$kieli)
 
@@ -85,7 +85,7 @@ df_expanded %>%
     prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
   )
 
-df_expanded %>% write_parquet("/media/volume/JaninaH/sec_doc_expanded")
+df_expanded %>% write_parquet("/JaninaH/sec_doc_expanded")
 
 # =========================================================
 # DESCRIPTIVES (FAILURE7)

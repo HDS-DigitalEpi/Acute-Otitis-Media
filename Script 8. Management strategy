@@ -2,27 +2,23 @@
 # MANAGEMENT STRATEGY
 # =========================================================
 
-dt <- read_parquet("/media/volume/JaninaH/strategydt_worstcase_doctor_sector.parquet")
+dt <- read_parquet("/JaninaH/strategydt_worstcase_doctor_sector.parquet")
 
-# --- Cleaning ---
+# --- Cleaning ---na values treated as zero
 dt <- dt %>%
   mutate(conditions = if_else(is.na(conditions), 0, conditions))
 
-# HUOM: tämä yhdistää "elakelaiset" → "toissa"
-# eli collapse sos-luokka (tärkeä tulkinnassa!)
+# Retired ("elakelaiset") are combined with other forms of employment ("toissa)(due small sample size)
 dt <- dt %>%
   mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
 
-# erikoisala: NA → "ei" (tärkeä ettei putoa mallista)
+# If specialty is NA--> coded as no specialty 
 dt <- dt %>%
   mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
 
-# sos NA → "tuntematon"
+# If occupational status is NA--> coded as "unknown"
 dt <- dt %>%
   mutate(sos = if_else(is.na(sos), "tuntematon", sos))
-
-# QC: jakauma
-table(dt$erikoisala)
 
 # =========================================================
 # CRUDE MODEL

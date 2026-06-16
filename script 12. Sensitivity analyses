@@ -25,8 +25,8 @@ library(nanoparquet)
 # 1. LOAD DATA
 # ---------------------------------------------------------
 
-res  <- read_parquet("/media/volume/JaninaH/fidien_kaikki_reseptit.parquet")
-cdf1 <- read_parquet("/media/volume/JaninaH/visits.parquet")  # visit data
+res  <- read_parquet("/JaninaH/fidien_kaikki_reseptit.parquet")
+cdf1 <- read_parquet("/JaninaH/visits.parquet")  # visit data
 
 # ---------------------------------------------------------
 # 2. PRESCRIPTION–VISIT LINKAGE WINDOWS
@@ -76,7 +76,7 @@ window_2d <- assign_sector(window_2d)
 # 4. DISPENSATION DATA
 # ---------------------------------------------------------
 
-df_all <- read_parquet("/media/volume/JaninaH/fidien_kaikki_toimitukset.parquet")
+df_all <- read_parquet("/JaninaH/fidien_kaikki_toimitukset.parquet")
 
 df_all$ab <- ifelse(grepl("^J01", df_all$ATC5_KOODI), 1, 0)
 

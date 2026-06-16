@@ -1,0 +1,296 @@
+set.seed(11)
+setwd("/JaninaH/codes/")
+.libPaths("/shared-directory/sd-tools/apps/R/lib/")
+
+library(dplyr)
+library(tidyr)
+library(forcats)
+library(openxlsx)
+library(lubridate)
+library(readr)
+library(data.table)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(glmmTMB)
+library(sandwich)
+library(lmtest)
+library(nnet)
+library(nanoparquet)
+#tässä uniikit vis ja kaikki tp:t
+dt<-read_parquet(paste0("/JaninaH/", "avojahilmop_26_4.parquet"))
+#huom, näissä sektori määritettävä paltulla eikä reseptidatalla!!
+dt <- dt%>%
+  mutate(
+    Sector = case_when(
+      grepl("^95|^6", PALTU) ~ 2,#Jos paltu alkaa 95 tai 6 → 2
+      TRUE ~ 1
+    )
+  )
+
+colnames(dt)
+
+#lisätään putkituksista ja toistuvista putkituksista kertovat sarakkeet
+#otetaan analyysiin vain FIDit joilla joskus putkitus + kaikki käynnit ennen ja jälkeen
+head(df)
+df <- dt %>%
+  mutate(
+    putkitus = ifelse(grepl("20|1019", TOIMP), 1, 0),  date = as.Date(PVM)
+  ) %>%
+  group_by(FID) %>%
+  mutate(
+    useampi_putkitus = ifelse(sum(putkitus) > 1, 1, 0)
+  ) %>%
+  ungroup()
+
+df <-df%>%group_by(FID) %>%
+  filter(any(putkitus == 1)) %>%
+  ungroup()
+nrow(df) 
+df<-unique(df)
+
+
+df<-unique(df)
+library(data.table)
+View(df)
+#ehto täyttyy 1 jos ei 0, laitetaan kuukauden jousto koska toimenpidettä ei välttämättä tehdä heti joten 
+#tarkasteltavat jaksot 183+30=213pv ja 365+30=395pv
+sum(is.na(df$TOIMP))
+korvat<-read_parquet("/JaninaH/korva_historia")
+df_rec<-subset(korvat, select = c(FID, PVM, recurrent))
+df_rec<-as.data.table(df_rec)
+rec1 <- df_rec[recurrent == 1, .(FID, PVM = PVM)]
+#All possible combinations where DATE_PK is PVM or 1–2 days after
+candidates <- rec1 %>%
+  inner_join(df_putki, by = "FID") %>%
+  filter(PVM <= pvm_putki & pvm_putki <= PVM + days(30)) %>%
+  mutate(pvm_diff = as.numeric(pvm_putki - PVM))
+#remove colums to avoid duplicates
+candidates<-subset(candidates, select = c(1,2,5,17,18))
+
+
+#Combine procedures with visit-data
+final <- df_putki %>%
+  left_join(best_matches, by = c("FID", "pvm_putki"))
+
+final <- final %>%
+  mutate(
+    pvm_diff_final = ifelse(is.na(PVM), NA, as.numeric(pvm_putki - PVM))
+  )
+
+final <- final %>%
+  mutate(
+    ehto = ifelse(!is.na(pvm_diff_final) &
+                    pvm_diff_final >= 0 &
+                    pvm_diff_final <= 30, 1, 0)
+  )
+
+
+
+df_final <- final[
+  pvm_putki >= as.Date("2020-01-01") &
+    pvm_putki <= as.Date("2022-12-31")
+]
+
+
+df<-df_final%>%filter(putkitus==1)
+
+df <- unique(df, by = c("FID", "pvm_putki"))
+sum(is.na(df$ehto))
+df$Ikalk <- cut(
+  df$Ika,
+  breaks = c(0, 2, 5, 12, 18),
+  labels = c("0–2", "2–5", "5–12", "12–18"),
+  right = FALSE # upper limit not included
+)
+
+
+df <- df %>%
+  mutate(conditions = if_else(
+    J30 == 1 | L20 == 1 | J45_J46 == 1 | D80_D89 == 1 | Q90 == 1,
+    1, 0
+  ))
+df <- df %>%
+  mutate(conditions = if_else(is.na(conditions), 0, conditions))
+df <- df %>%
+  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
+table(df$erikoisala)
+#80 na values to group ei
+
+df%>%write_parquet(paste0("/JaninaH/","putkidata"))
+df<-read_parquet(paste0("/JaninaH/","putkidata"))
+
+df <- df%>%
+  mutate(
+    Sector = case_when(
+      grepl("^95|^6", PALTU) ~ 2,#Jos paltu alkaa 95 tai 6 → 2
+      TRUE ~ 1
+    )
+  )
+
+sum(is.na(df$sos))
+table(df$Sector, df$ehto)
+extra_fids <- setdiff(dt$FID, df$FID)
+
+
+df <- df %>%
+  filter(!(FID %in% extra_fids))
+#213 fidiä ilman muita käyntejä
+df %>%
+  group_by(Sector) %>%
+  summarise(
+    n = n(),
+    n_ehto1 = sum(ehto == 1, na.rm = TRUE),
+    pct_ehto1 = 100 * n_ehto1 / n
+  )
+
+#Sector     n n_ehto1 pct_ehto1
+#<dbl> <int>   <int>     <dbl>
+#  1      1  4911    2544      51.8#
+#  2      2  3532    1923      54.4
+sum(is.na(df$conditions))
+
+dt %>%
+  group_by(Sector) %>%
+  summarise(
+    n = n(),
+    n_ehto1 = sum(conditions == 1, na.rm = TRUE),
+    pct_ehto1 = 100 * n_ehto1 / n
+  )
+
+df %>%
+  group_by(Sector) %>%
+  summarise(
+    n = n(),
+    n_ehto1 = sum(Ikalk == "12-18", na.rm = TRUE),
+    pct_ehto1 = 100 * n_ehto1 / n
+  )
+
+df <- df %>%
+  mutate(
+    PVM = as.Date(pvm_putki),
+    month = month(pvm_putki),
+    season = case_when(
+      month %in% c(12, 1, 2)  ~ "talvi",
+      month %in% c(3, 4, 5)   ~ "kevät",
+      month %in% c(6, 7, 8)   ~ "kesä",
+      month %in% c(9, 10, 11) ~ "syksy",
+      TRUE ~ NA_character_
+    ),
+    dg = if_else(grepl("H66", KOODI, fixed = TRUE), "H66", "H65_H67")
+  ) %>%
+  select(-month)
+model<-glmmTMB(ehto~ Sector + (1|FID), data = df, family = binomial)
+summary(model)
+CI <- confint(model)
+exp(CI)
+
+model <- glmmTMB(ehto ~Sector + Sukupuoli + Ikalk + kieli + conditions + 
+                   sos + season + (1 | FID), 
+                 data = df, family = binomial)  
+
+
+summary(model)
+CI <- confint(model)
+exp(CI)
+
+model <- glmmTMB(ehto ~Sector + Sukupuoli + Ikalk + (1 || FID), 
+                 data = df, family = binomial)  
+
+#ikäluokassa yli 12v niin vähän, yhdisteään
+yhd <- df %>%
+  mutate(
+    Ikalk = case_when(
+      Ikalk %in% c("12–17.9v", "5–11.9v") ~ "5-17.9v",
+      TRUE ~ Ikalk
+    )
+  )
+
+n_distinct(df_putki$FID)
+s2<-df_putki%>%filter(Sector==2)
+s1<-df_putki%>%filter(Sector==1)
+
+
+
+n_distinct(s1$FID)
+putket<-s2%>%filter(putkitus==1)
+n_distinct(putket$FID)
+p2 <- unique(putket, by = c("FID", "pvm_putki"))
+
+putket<-s1%>%filter(putkitus==1)
+p1 <- unique(putket, by = c("FID", "pvm_putki"))
+
+
+p2 <- p2[
+  pvm_putki >= as.Date("2020-01-01") &
+    pvm_putki <= as.Date("2022-12-31")
+]
+
+p1 <- p1[
+  pvm_putki >= as.Date("2020-01-01") &
+    pvm_putki <= as.Date("2022-12-31")
+]
+
+
+
+
+cat_vars <- c("Ikalk", "kieli", "Sukupuoli", "sos", 
+              "season", "conditions", "dg","Q90","L20","J45_J46", "D80_D89", "J30")
+
+
+df2 <- df %>%
+  mutate(
+    # Muuta kaikki kategoriset tarvittaessa merkkijonoiksi
+    across(all_of(cat_vars), ~ as.character(.x)),
+    
+    # NA -> "0" erityisesti näissä sarakkeissa
+    conditions = if_else(is.na(conditions), "0", conditions),
+    Q90        = if_else(is.na(Q90),        "0", Q90),
+    J45_J46    = if_else(is.na(J45_J46),    "0", J45_J46),
+    L20        = if_else(is.na(L20),        "0", L20),
+    J30        = if_else(is.na(J30),        "0", J30),
+    D80_D89    = if_else(is.na(D80_D89),    "0", D80_D89),
+    sektori = as.character(Sector)
+  )
+
+
+# 1) Pitkä muoto
+long <- df2 %>%
+  pivot_longer(
+    cols = all_of(cat_vars),
+    names_to = "muuttuja",
+    values_to = "arvo"
+  )
+
+# 2) Laske N per muuttuja × arvo × sektori
+counted <- long %>%
+  group_by(muuttuja, arvo, sektori) %>%
+  summarise(n = n(), .groups = "drop")
+
+# 3) Laske prosentit sektorin sisällä per muuttuja
+counted <- counted %>%
+  group_by(muuttuja, sektori) %>%
+  mutate(p = n / sum(n)) %>%
+  ungroup()
+
+# 4) Leveäksi: sektorit vierekkäin, jokaiselle N ja %
+wide <- counted %>%
+  pivot_wider(
+    names_from = sektori,
+    values_from = c(n, p),
+    values_fill = 0
+  ) %>%
+  arrange(muuttuja, arvo) %>%
+  mutate(across(starts_with("p_"), ~ round(.x * 100, 1)))
+
+
+wide
+wb <- createWorkbook(wide)
+
+addWorksheet(wb, "putkitus")
+writeData(wb, "putkitus", wide)
+
+addWorksheet(wb, "by_sector")
+writeData(wb, "by_sector", wide2)
+
+saveWorkbook(wb, "subkohortin_table.xlsx", overwrite = TRUE)

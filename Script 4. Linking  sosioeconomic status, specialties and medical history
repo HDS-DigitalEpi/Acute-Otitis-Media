@@ -1,29 +1,29 @@
 ## ============================================================================
-## SECTION 9: Socioeconomic Status (Statistics Finland / Tilastokeskus)
+## SECTION 9: Occupational Status (Statistics Finland / Tilastokeskus)
 ## ============================================================================
+## by parent who had higher status
+# Read occupational classification data
+sose <- fread("statistics_finland/Tilastokeskus.csv")
 
-# Read socioeconomic classification data
-sose <- fread("/media/volume/Data_20260319/Tilastokeskus/FD_2698_sose_u1947_1.sas7bdat")
-
-# Add calendar year of visit for merging with annual socioeconomic status
+# Add calendar year of visit for merging with annual occupational status
 df <- df %>% mutate(Year = year(PVM))
 
-# Retain the last recorded socioeconomic status per person per year
+# Retain the last recorded occupational status per person per year
 # to avoid duplicate rows when merging
 status_df <- sose %>%
   group_by(vuosi, FID) %>%
   summarise(sose = last(sose), .groups = "drop")
 
-# Merge annual socioeconomic status into main dataset
+# Merge annual occupational status into main dataset
 yhd <- df %>%
   left_join(status_df, by = c("FID", "Year" = "vuosi"))
 
-# Extract the first digit of the socioeconomic code (broad category)
+# Extract the first digit of the occupational code (broad category)
 yhd$sos <- substr(as.character(yhd$sose), 1, 1)
 table(yhd$sos)
 
 # Reclassify into simplified occupational categories:
-#   1–2 = employed (workers); 3 = upper-level employees;
+#   1–2 = employed (workers); 3 = upper-level non-manual employees;
 #   4–5 = employed (self-employed/farmers); 6 = students;
 #   7 = retired; 8 = unemployed; 9 = unknown
 yhd$sos <- factor(yhd$sos,
@@ -31,7 +31,7 @@ yhd$sos <- factor(yhd$sos,
                   labels = c("toissa", "toissa", "ylemmat", "toissa", "toissa",
                              "opiskelijat", "toissa", "tyottomat", "tuntematon"))
 
-# Classify native language as domestic (Finnish or Swedish) vs. other
+# Classify native language as Finnish or Swedish vs. other
 yhd <- yhd %>%
   mutate(kieli = case_when(
     str_detect(kieli, regex("fi|sv", ignore_case = TRUE))  ~ "kotim",
@@ -40,12 +40,12 @@ yhd <- yhd %>%
 table(yhd$kieli)
 
 
-## ============================================================================
-## SECTION 10: Physician Specialty (Valvira Register)
-## ============================================================================
+## ==============================================================================
+## SECTION 10: Physician Specialty (Finnish Supervisory Agency/ Valvira Register)
+## ==============================================================================
 
 # Read Valvira physician qualification data
-erikois <- fread("/media/volume/Data_20260319/Valvira/FD_2698_Liite 1 THL_2698_14.02.00_2023.csv")
+erikois <- fread("/physician_specialty/Valvira/2023.csv")
 erik <- erikois %>% select(FD_HASH_Rekisterointinumero, Tutkinto, Suorituspvm)
 
 # Convert qualification date to Date format
@@ -83,8 +83,8 @@ table(dt$erikoisala)
 table(dt$sos)
 
 # Save final analysis-ready dataset
-dt %>% write_parquet(paste0("/media/volume/JaninaH/", "avojahilmo_putketstatus.parquet"))
-dt <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmo_putketstatus.parquet"))
+dt %>% write_parquet(paste0("/JaninaH/", "avojahilmo_putketstatus.parquet"))
+dt <- read_parquet(paste0("/JaninaH/", "avojahilmo_putketstatus.parquet"))
 library(data.table)
 
 ## ============================================================================
@@ -93,39 +93,38 @@ library(data.table)
 ## ============================================================================
 
 # Reload final analysis dataset
-dt <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmo_putketstatus.parquet"))
+dt <- read_parquet(paste0("/JaninaH/", "avojahilmo_putketstatus.parquet"))
 
 # Extract unique patient IDs from the study population
 fids <- unique(dt$FID)
-length(fids)  # n = 298,015 (includes 286 from long-term diagnosis data)
 
 # --- 11.1 Read all HILMO ICD-10 diagnosis files and filter to study patients -
 
-icd_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_ICD10_1.csv",
+icd_1 <- read_delim("diagnosis_data_HILMO_H_ICD10_1.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(HILMOID, FID, KOODI) %>%
   filter(FID %in% fids)
 
-icd_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_ICD10_2.csv",
+icd_2 <- read_delim("diagnosis_data_HILMO_H_ICD10_2.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(HILMOID, FID, KOODI) %>%
   filter(FID %in% fids)
 
-icd_3 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_ICD10_3.csv",
+icd_3 <- read_delim(diagnosis_data_HILMO_H_ICD10_3.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(HILMOID, FID, KOODI) %>%
   filter(FID %in% fids)
 
-icd_4 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_ICD10_4.csv",
+icd_4 <- read_delim("diagnosis_data_HILMO_H_ICD10_4.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(HILMOID, FID, KOODI) %>%
   filter(FID %in% fids)
 
-icd_5 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_ICD10_5.csv",
+icd_5 <- read_delim("diagnosis_data_HILMO_H_ICD10_5.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(HILMOID, FID, KOODI) %>%
@@ -133,33 +132,33 @@ icd_5 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_H_IC
 
 # Combine all HILMO diagnosis files
 hist <- bind_rows(icd_1, icd_2, icd_3, icd_4, icd_5)
-hist %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
-hist <- read_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
+hist %>% write_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
+hist <- read_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
 
 
 # --- 11.2 Read HILMO visit files to obtain diagnosis dates -------------------
 
-h0712 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_HILMO0712.csv",
+h0712 <- read_delim("visit_data_HILMO1.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(FID, HILMOID, TUPVA)
 
-h1317 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_HILMO1317.csv",
+h1317 <- read_delim("visit_data_HILMO2.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(FID, HILMOID, TUPVA)
 
-h1820 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_HILMO1820.csv",
+h1820 <- read_delim("visit_data_HILMO3.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(FID, HILMOID, TUPVA)
 
-h2122 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_HILMO2122.csv",
+h2122 <- read_delim("visit_data_HILMO4.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(FID, HILMOID, TUPVA)
 
-h9806 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_HILMO9806.csv",
+h9806 <- read_delim("visit_data_HILMO5.csv",
                     delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
   select(FID, HILMOID, TUPVA)
@@ -182,8 +181,8 @@ cdf1 <- merge(hist, comb, by = "HILMOID", all.x = TRUE)
 cdf1 <- subset(cdf1, select = -c(FID.y))
 
 # Save HILMO medical history with visit dates
-cdf1 %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
-hilf <- read_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
+cdf1 %>% write_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
+hilf <- read_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
 
 
 ## ============================================================================
@@ -193,7 +192,7 @@ hilf <- read_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
 # --- 12.1 Loop through AvoHILMO visit reason files and filter to study patients
 
 for (i in 1:14) {
-  filename <- paste0("/media/volume/Data_20260319/THL/FD_2698_THL2023_2698_AH_KAYNTISYY_", i, ".csv")
+  filename <- paste0("diagnosis_data_AvoHILMO_AH_KAYNTISYY_", i, ".csv")
 
   # Read visit reason data; select visit ID, patient ID, and diagnosis code
   dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
@@ -208,8 +207,8 @@ for (i in 1:14) {
 # Combine all filtered AvoHILMO visit reason diagnoses
 syyt <- bind_rows(icdf1, icdf2, icdf3, icdf4, icdf5, icdf6, icdf7,
                   icdf8, icdf9, icdf10, icdf11, icdf12, icdf13, icdf14)
-syyt %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_sairaush.parquet"))
-syyt <- read_parquet(paste0("/media/volume/JaninaH/", "avohilmo_sairaush.parquet"))
+syyt %>% write_parquet(paste0("/JaninaH/", "avohilmo_sairaush.parquet"))
+syyt <- read_parquet(paste0("/JaninaH/", "avohilmo_sairaush.parquet"))
 
 # Extract unique visit IDs for linking with visit-level data
 id <- unique(syyt$AVOHILMOID)
@@ -220,7 +219,7 @@ colnames(syyt)
 #          (Note: 2016 included here to capture prior medical history)
 
 for (i in 16:20) {
-  filename <- paste0("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_", i, ".csv")
+  filename <- paste0("visit_data_AvoHILMO_AH_", i, ".csv")
 
   dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
@@ -232,25 +231,25 @@ for (i in 16:20) {
 }
 
 # Years 2021–2022 are split into two files each
-Ahs21_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_1.csv",
+Ahs21_1 <- read_delim("visit_data_AvoHILMO_AH_21_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs21_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_2.csv",
+Ahs21_2 <- read_delim("visit_data_AvoHILMO_AH_21_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs22_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_1.csv",
+Ahs22_1 <- read_delim("visit_data_AvoHILMO_AH_22_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs22_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_2.csv",
+Ahs22_2 <- read_delim("visit_data_AvoHILMO_AH_22_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
@@ -258,8 +257,8 @@ Ahs22_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH
 
 # Combine AvoHILMO visit data across all years
 ah1722 <- bind_rows(Ahs16, Ahs17, Ahs18, Ahs19, Ahs20, Ahs21_1, Ahs21_2, Ahs22_1, Ahs22_2)
-ah1722 %>% write_parquet(paste0("/media/volume/JaninaH/", "ah1722.parquet"))
-ah1722 <- read_parquet(paste0("/media/volume/JaninaH/", "ah1722.parquet"))
+ah1722 %>% write_parquet(paste0("/JaninaH/", "ah1722.parquet"))
+ah1722 <- read_parquet(paste0("/volume/JaninaH/", "ah1722.parquet"))
 ah1722$AVOHILMOID <- as.character(ah1722$AVOHILMOID)
 
 # Merge diagnosis codes with visit dates; retain only needed columns
@@ -267,9 +266,9 @@ avof <- syyt %>%
   left_join(ah1722, by = c("FID", "AVOHILMOID")) %>%
   select(AVOHILMOID, FID, KAYNTI_LOPPUI, LUOKITUS)
 
-avof %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_sairaush.parquet"))
-avof <- read_parquet(paste0("/media/volume/JaninaH/", "avohilmo_sairaush.parquet"))
-hilf <- read_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
+avof %>% write_parquet(paste0("/JaninaH/", "avohilmo_sairaush.parquet"))
+avof <- read_parquet(paste0("/JaninaH/", "avohilmo_sairaush.parquet"))
+hilf <- read_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
 
 
 # --- 12.3 Harmonise column names for combining AvoHILMO and HILMO data ------
@@ -287,8 +286,8 @@ colnames(hilf)[4] <- "PVM"
 avof$PVM <- as.Date(as.character(avof$PVM), format = "%d.%m.%Y %H:%M")
 hilf$PVM <- as.Date(as.character(hilf$PVM), format = "%d.%m.%Y")
 
-avof %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_sairaush.parquet"))
-hilf %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"))
+avof %>% write_parquet(paste0("/JaninaH/", "avohilmo_sairaush.parquet"))
+hilf %>% write_parquet(paste0("/JaninaH/", "hilmo_sairaush.parquet"))
 
 
 ## ============================================================================
@@ -300,20 +299,20 @@ hilf %>% write_parquet(paste0("/media/volume/JaninaH/", "hilmo_sairaush.parquet"
 
 # Read long-term (chronic) diagnosis files from AvoHILMO and filter for
 # atopic and immunological comorbidities relevant to otitis media risk
-P1 <- read_delim("/media/volume/Data_20260319//THL/FD_2698_THL2023_2698_AH_pitkadiag_1.csv",
+P1 <- read_delim("AvoHILMO_AH_pitkadiag_1.csv",
                  delim = ";", col_types = cols(.default = "c"),
                  locale = locale(encoding = "UTF-8")) %>%
   select(AVOHILMOID, ICD10)
 p1 <- P1 %>% filter(grepl("^L20|^J30|^D8|^Q90|^J45|^J46", ICD10, ignore.case = TRUE))
 
-P2 <- read_delim("/media/volume/Data_20260319//THL/FD_2698_THL2023_2698_AH_pitkadiag_2.csv",
+P2 <- read_delim("AvoHILMO_AH_pitkadiag_2.csv",
                  delim = ";", col_types = cols(.default = "c"),
                  locale = locale(encoding = "UTF-8")) %>%
   select(AVOHILMOID, ICD10)
 p2 <- P2 %>% filter(grepl("^L20|^J30|^D8|^Q90|^J45|^J46", ICD10, ignore.case = TRUE))
 
 p12 <- bind_rows(p1, p2)
-p12 %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_pitka_atopichist_parquet"))
+p12 %>% write_parquet(paste0("/JaninaH/", "avohilmo_pitka_atopichist_parquet"))
 
 
 # --- 13.1 Read AvoHILMO visit files to get dates for long-term diagnoses -----
@@ -321,7 +320,7 @@ p12 %>% write_parquet(paste0("/media/volume/JaninaH/", "avohilmo_pitka_atopichis
 #          records may not always be linked to a specific indexed visit
 
 for (i in 16:20) {
-  filename <- paste0("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_", i, ".csv")
+  filename <- paste0("visit_data_AvoHILMO_AH_", i, ".csv")
 
   dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
@@ -332,25 +331,25 @@ for (i in 16:20) {
   assign(paste0("Ahs", i), dat_filtered)
 }
 
-Ahs21_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_1.csv",
+Ahs21_1 <- read_delim("visit_data_AvoHILMO_AH_21_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(FID %in% fids)
 
-Ahs21_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_2.csv",
+Ahs21_2 <- read_delim("visit_data_AvoHILMO_AH_21_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(FID %in% fids)
 
-Ahs22_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_1.csv",
+Ahs22_1 <- read_delim("visit_data_AvoHILMO_AH_22_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(FID %in% fids)
 
-Ahs22_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_2.csv",
+Ahs22_2 <- read_delim("visit_data_AvoHILMO_AH_22_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
@@ -370,14 +369,14 @@ colnames(avoh)[3] <- "PVM"
 
 avoh$PVM <- as.Date(as.character(avoh$PVM), format = "%d.%m.%Y %H:%M")
 
-# Remove rows with no diagnosis code (visits not linked to a long-term diagnosis)
+# Remove rows with no diagnosis code 
 avoh <- avoh %>% filter(!is.na(KOODI))
 
 # Combine all three history sources: AvoHILMO visit reasons, HILMO, and
 # AvoHILMO long-term diagnoses into a single medical history dataset
 avohil <- bind_rows(avof, hilf, avoh)
-avohil %>% write_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_sairausf.parquet"))
-avohil <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_sairausf.parquet"))
+avohil %>% write_parquet(paste0("/JaninaH/", "avojahilmop_sairausf.parquet"))
+avohil <- read_parquet(paste0("/JaninaH/", "avojahilmop_sairausf.parquet"))
 
 
 ## ============================================================================
@@ -433,8 +432,8 @@ df_final <- dt %>%
 # Verify flag distribution
 table(df_final$J45_J46)
 
-df_final %>% write_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_26_4.parquet"))
-df_final <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_2026.parquet"))
+df_final %>% write_parquet(paste0("/JaninaH/", "avojahilmop_26_4.parquet"))
+df_final <- read_parquet(paste0("/JaninaH/", "avojahilmop_2026.parquet"))
 
 
 ## ============================================================================
@@ -448,21 +447,21 @@ df_final <- read_parquet(paste0("/media/volume/JaninaH/", "avojahilmop_2026.parq
 
 # --- 15.1 Extract prior otitis media diagnoses from AvoHILMO long-term files -
 
-P1 <- read_delim("/media/volume/Data_20260319//THL/FD_2698_THL2023_2698_AH_pitkadiag_1.csv",
+P1 <- read_delim("AvoHILMO_AH_pitkadiag_1.csv",
                  delim = ";", col_types = cols(.default = "c"),
                  locale = locale(encoding = "UTF-8")) %>%
   select(AVOHILMOID, ICD10) %>%
   filter(grepl("^H67|^H66|^H65", ICD10, ignore.case = TRUE))
 
-P2 <- read_delim("/media/volume/Data_20260319//THL/FD_2698_THL2023_2698_AH_pitkadiag_2.csv",
+P2 <- read_delim("AvoHILMO_AH_pitkadiag_2.csv",
                  delim = ";", col_types = cols(.default = "c"),
                  locale = locale(encoding = "UTF-8")) %>%
   select(AVOHILMOID, ICD10) %>%
   filter(grepl("^H67|^H66|^H65", ICD10, ignore.case = TRUE))
 
 p12 <- bind_rows(P1, P2)
-p12 %>% write_parquet(paste0("/media/volume/JaninaH/", "avopitka_raom.parquet"))
-p12 <- read_parquet(paste0("/media/volume/JaninaH/", "avopitka_raom.parquet"))
+p12 %>% write_parquet(paste0("/JaninaH/", "avopitka_raom.parquet"))
+p12 <- read_parquet(paste0("/JaninaH/", "avopitka_raom.parquet"))
 
 # Extract unique visit IDs for filtering visit-level data
 id <- unique(p12$AVOHILMOID)
@@ -471,7 +470,7 @@ id <- unique(p12$AVOHILMOID)
 # --- 15.2 Read AvoHILMO visit files to get dates for long-term OM diagnoses --
 
 for (i in 16:20) {
-  filename <- paste0("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_", i, ".csv")
+  filename <- paste0("visit_data_AvoHILMO_AH_", i, ".csv")
 
   dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
                     locale = locale(encoding = "UTF-8")) %>%
@@ -481,25 +480,25 @@ for (i in 16:20) {
   assign(paste0("Ahs", i), dat_filtered)
 }
 
-Ahs21_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_1.csv",
+Ahs21_1 <- read_delim("visit_data_AvoHILMO_AH_21_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs21_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_21_2.csv",
+Ahs21_2 <- read_delim("visit_data_AvoHILMO_AH_21_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs22_1 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_1.csv",
+Ahs22_1 <- read_delim("visit_data_AvoHILMO_AH_22_1.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
   filter(AVOHILMOID %in% id)
 
-Ahs22_2 <- read_delim("/media/volume/Data_20260319//THL//FD_2698_THL2023_2698_AH_22_2.csv",
+Ahs22_2 <- read_delim("visit_data_AvoHILMO_AH_22_2.csv",
                       delim = ";", col_types = cols(.default = "c"),
                       locale = locale(encoding = "UTF-8")) %>%
   select(FID, AVOHILMOID, KAYNTI_LOPPUI) %>%
@@ -526,8 +525,8 @@ korvat <- bind_rows(avof, hilf, avop)
 korvat <- korvat %>% filter(grepl("^H67|^H66|^H65", KOODI, ignore.case = TRUE))
 korvat <- korvat %>% filter(!is.na(KOODI))
 
-korvat %>% write_parquet("/media/volume/JaninaH/korva_historia")
-korvat <- read_parquet("/media/volume/JaninaH/korva_historia")
+korvat %>% write_parquet("/JaninaH/korva_historia")
+korvat <- read_parquet("/JaninaH/korva_historia")
 
 
 # --- 15.3 Define otitis media episodes using a 30-day grouping window --------
@@ -581,7 +580,7 @@ df <- df %>%
   ungroup()
 
 # Binary flag: 0 = first visit in episode, 1 = repeat visit within episode
-df$is_repetative <- ifelse(grepl("1", df$visit_order_in_period), 0, 1)
+df$is_repetative <- ifelse(df$visit_order_in_period == 1, 0, 1)
 
 
 # --- 15.5 Count prior OM episodes within rolling 6- and 12-month windows -----
@@ -641,5 +640,5 @@ df[, anchor := nafill(rec_date, type = "locf"), by = FID]
 # rAOM phase at the time of the current visit
 df[, raom := as.integer(!is.na(anchor) & as.integer(PVM - anchor) <= lookback_days)]
 
-# Save final dataset with rAOM flag
-df %>% write_parquet("/media/volume/JaninaH/korva_historia")
+# Save recurrent otitis media history with rAOM flag
+df %>% write_parquet("/JaninaH/korva_historia")
