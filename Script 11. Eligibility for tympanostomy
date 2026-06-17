@@ -20,6 +20,18 @@ library(nanoparquet)
 #tässä uniikit vis ja kaikki tp:t
 dt<-read_parquet(paste0("/JaninaH/", "avojahilmop_26_4.parquet"))
 #huom, näissä sektori määritettävä paltulla eikä reseptidatalla!!
+
+
+
+# ============================================================
+# 1. DATA
+# Load otitis media visit history and outpatient procedure data.
+# Rows with missing diagnosis code are excluded from the visit history.
+# ============================================================
+korvat <- read_parquet("/media/volume/JaninaH/korva_historia") %>%
+  filter(!is.na(KOODI))
+dt <- read_parquet("/media/volume/JaninaH/avojahilmop_26_4.parquet")
+#define sector with PALTU to match with real procedure, not according to prescriptions
 dt <- dt%>%
   mutate(
     Sector = case_when(
@@ -28,64 +40,140 @@ dt <- dt%>%
     )
   )
 
-colnames(dt)
+setDT(korvat)
+setDT(dt)
 
-#lisätään putkituksista ja toistuvista putkituksista kertovat sarakkeet
-#otetaan analyysiin vain FIDit joilla joskus putkitus + kaikki käynnit ennen ja jälkeen
-head(df)
-df <- dt %>%
-  mutate(
-    putkitus = ifelse(grepl("20|1019", TOIMP), 1, 0),  date = as.Date(PVM)
-  ) %>%
-  group_by(FID) %>%
-  mutate(
-    useampi_putkitus = ifelse(sum(putkitus) > 1, 1, 0)
-  ) %>%
-  ungroup()
+korvat[, visit_date := as.IDate(PVM)]
 
-df <-df%>%group_by(FID) %>%
-  filter(any(putkitus == 1)) %>%
-  ungroup()
-nrow(df) 
-df<-unique(df)
+# ============================================================
+# 2. TYMPANOSTOMY PROCEDURES
+# Identify tympanostomy procedures using procedure codes 20 and 1019.
+# Restricted to procedures performed between 2020–2022 (study period).
+# Duplicate patient-date combinations are removed to retain one row
+# per patient per procedure date.
+# Tympanostomy procedures have been pre-filtered at data extraction;
+# the grepl pattern serves as an additional verification step.
+# ============================================================
+putki <- dt[grepl("20|1019", TOIMP),
+            .(FID, proc_date = as.IDate(PVM))]
 
+putki <- putki[
+  proc_date >= as.IDate("2020-01-01") &
+  proc_date <= as.IDate("2022-12-31")
+]
 
-df<-unique(df)
-library(data.table)
-View(df)
-#ehto täyttyy 1 jos ei 0, laitetaan kuukauden jousto koska toimenpidettä ei välttämättä tehdä heti joten 
-#tarkasteltavat jaksot 183+30=213pv ja 365+30=395pv
-sum(is.na(df$TOIMP))
-korvat<-read_parquet("/JaninaH/korva_historia")
-df_rec<-subset(korvat, select = c(FID, PVM, recurrent))
-df_rec<-as.data.table(df_rec)
-rec1 <- df_rec[recurrent == 1, .(FID, PVM = PVM)]
-#All possible combinations where DATE_PK is PVM or 1–2 days after
-candidates <- rec1 %>%
-  inner_join(df_putki, by = "FID") %>%
-  filter(PVM <= pvm_putki & pvm_putki <= PVM + days(30)) %>%
-  mutate(pvm_diff = as.numeric(pvm_putki - PVM))
-#remove colums to avoid duplicates
-candidates<-subset(candidates, select = c(1,2,5,17,18))
+putki <- unique(putki, by = c("FID", "proc_date"))
 
+# ============================================================
+# 3. LINK PROCEDURE DATES TO ALL PRIOR VISITS
+# Each tympanostomy is linked to all otitis media visits in the
+# preceding 12 months + 30-day buffer (395 days) via a
+# many-to-many merge on patient ID.
+# Only visits occurring before or on the procedure date are retained.
+# ============================================================
+df <- merge(
+  putki,
+  korvat,
+  by = "FID",
+  allow.cartesian = TRUE   # expected: multiple visits per procedure
+)
 
-#Combine procedures with visit-data
-final <- df_putki %>%
-  left_join(best_matches, by = c("FID", "pvm_putki"))
+df <- df[
+  visit_date <= proc_date &
+  visit_date >= proc_date - 395
+]
 
-final <- final %>%
-  mutate(
-    pvm_diff_final = ifelse(is.na(PVM), NA, as.numeric(pvm_putki - PVM))
-  )
+setorder(df, FID, proc_date, visit_date)
 
-final <- final %>%
-  mutate(
-    ehto = ifelse(!is.na(pvm_diff_final) &
-                    pvm_diff_final >= 0 &
-                    pvm_diff_final <= 30, 1, 0)
-  )
+# ============================================================
+# 4. DEFINE EPISODES (14-DAY WINDOW)
+# Visits are grouped into episodes within each patient-procedure pair.
+# A new episode begins when the gap from the current episode's start
+# date exceeds 14 days. Episode numbering restarts for each procedure.
+# ============================================================
+df[, new_period := {
+  period_id  <- 0L
+  start_date <- as.IDate(NA)
+  out        <- integer(.N)
+  for (i in seq_len(.N)) {
+    if (is.na(start_date) || visit_date[i] - start_date > 14) {
+      period_id  <- period_id + 1L
+      start_date <- visit_date[i]
+    }
+    out[i] <- period_id
+  }
+  out
+}, by = .(FID, proc_date)]
 
+# ============================================================
+# 5. EPISODE START DATE
+# Record the first visit date of each episode for use in
+# calculating the time between episode onset and procedure date.
+# ============================================================
+df[, episode_start := min(visit_date), by = .(FID, proc_date, new_period)]
 
+# ============================================================
+# 6. COLLAPSE TO ONE ROW PER EPISODE
+# Retain unique patient-procedure-episode combinations to avoid
+# double-counting multiple visit rows within the same episode.
+# Calculate the number of days between each episode start and
+# the procedure date.
+# ============================================================
+episodes <- unique(df[, .(FID, proc_date, episode_start)])
+episodes[, diff := as.numeric(proc_date - episode_start)]
+
+# ============================================================
+# 7. COUNT EPISODES WITHIN 6- AND 12-MONTH WINDOWS
+# Count episodes whose start date falls within 180 days (6 months)
+# or 365 days (12 months) of the procedure date, each extended by
+# a 30-day buffer to allow for administrative coding delays.
+# ============================================================
+counts <- episodes[, .(
+  n_6m  = sum(diff <= 213),   # 180 + 30 days
+  n_12m = sum(diff <= 395)    # 365 + 30 days
+), by = .(FID, proc_date)]
+
+# ============================================================
+# 8. APPLY RECURRENT AOM CRITERIA
+# A patient is flagged as recurrent AOM (rAOM) if they had:
+#   ≥3 episodes within 6 months, OR
+#   ≥4 episodes within 12 months
+# prior to the tympanostomy procedure date.
+# ============================================================
+counts[, recurrent_flag := as.integer(n_6m >= 3 | n_12m >= 4)]
+
+# ============================================================
+# 9. JOIN RECURRENT FLAG BACK TO FULL DATASET
+# Merge episode counts and recurrent flag onto all visit rows.
+# Patients with no matching count (no prior episodes in window)
+# are assigned recurrent_flag = 0.
+# ============================================================
+df <- merge(df, counts, by = c("FID", "proc_date"), all.x = TRUE)
+df[is.na(recurrent_flag), recurrent_flag := 0]
+
+# ============================================================
+# 10. FINAL PROCEDURE-LEVEL DATASET
+# Collapse to one row per patient-procedure combination,
+# retaining the recurrent AOM flag and episode counts.
+# ============================================================
+final <- unique(df[, .(
+  FID,
+  proc_date,
+  recurrent_flag,
+  n_6m,
+  n_12m
+)], by = c("FID", "proc_date"))
+
+# ============================================================
+# 11. DESCRIPTIVE CHECKS
+# Verify distribution of recurrent flag and episode counts
+# before proceeding to analysis.
+# ============================================================
+table(final$recurrent_flag)
+summary(final$n_6m)
+summary(final$n_12m)
+#==============================================================
+12. Join with tympanostomy file with demographics
 
 df_final <- final[
   pvm_putki >= as.Date("2020-01-01") &
@@ -144,11 +232,7 @@ df %>%
     pct_ehto1 = 100 * n_ehto1 / n
   )
 
-#Sector     n n_ehto1 pct_ehto1
-#<dbl> <int>   <int>     <dbl>
-#  1      1  4911    2544      51.8#
-#  2      2  3532    1923      54.4
-sum(is.na(df$conditions))
+
 
 dt %>%
   group_by(Sector) %>%
