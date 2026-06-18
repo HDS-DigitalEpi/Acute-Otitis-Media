@@ -195,7 +195,7 @@ res14 <- summarise_failure(final14)
 res45 <- summarise_failure(final45)
 
 # ---------------------------------------------------------
-# 8. MODELS (DETAILS REPORTED IN MAIN ANALYSIS)
+# 8. MODELS (DETAILS REPORTED IN MAIN ANALYSIS Sript 6 and 8)
 # ---------------------------------------------------------
 
 library(glmmTMB)
