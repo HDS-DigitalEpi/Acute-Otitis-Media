@@ -1,0 +1,249 @@
+============================================
+# MIXED EFFECTS FOR MANAGEMENT AND ANTIBIOTIC TREATMENT FAILURE
+# =========================================================
+
+setwd("/JaninaH/codes/")
+.libPaths("/shared-directory/apps/R/lib/")
+
+# --- Load libraries ---
+library(nanoparquet)
+library(dplyr)
+library(lubridate)
+library(readr)
+library(data.table)
+library(ggplot2)
+library(purrr)
+library(tidyr)
+library(cmdstanr)
+library(brms)
+library(rstan)
+library(nnet)
+library(lme4)
+library(glmmTMB)
+library(openxlsx)
+library(sandwich)
+
+# cmdstan path (brms backend)
+set_cmdstan_path("/home/hansasja/Desktop/shared-directory/cmdstan-2.37.0/")
+
+# =========================================================
+# DATA IMPORT
+# =========================================================
+
+# Read data where one doctor can be involved in both sectors at the same day
+dt <- read_parquet("/JaninaH/failuredata_doctor_sectoral.parquet")
+
+# Summary check
+table(dt$erikoisala)
+
+# =========================================================
+# DATA CLEANING
+# =========================================================
+
+dt <- dt %>%
+  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
+
+dt <- dt %>%
+  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
+
+# NA diagnostics
+sum(is.na(dt$erikoisala))
+sum(is.na(dt$FID))
+sum(is.na(dt$Sector))
+sum(is.na(dt$index_sector))
+sum(is.na(dt$sos))
+
+# =========================================================
+# FACTOR CONVERSION
+# =========================================================
+
+dt$failed_visit <- factor(dt$failed_visit)
+dt$Sector <- factor(dt$Sector)
+dt$FID    <- factor(dt$FID)     
+dt$season <- factor(dt$season)
+dt$kieli  <- factor(dt$kieli)
+
+sum(is.na(dt$kieli))
+
+# =========================================================
+# INDEX SECTOR EXPANSION (BOTH → 1,2)
+# =========================================================
+
+df_expanded <- dt %>%
+  mutate(
+    index_sector = case_when(
+      index_sector %in% c("1","2") ~ index_sector,
+      index_sector == "both" ~ "1,2"
+    )
+  ) %>%
+  separate_rows(index_sector, sep = ",")
+
+# QC: kuinka usein visit-sector = index-sector
+# eli concordance (hyödyllinen sanity check)
+df_expanded %>%
+  summarise(
+    prosentti = mean(Sector == index_sector, na.rm = TRUE) * 100
+  )
+
+df_expanded %>% write_parquet("/JaninaH/sec_doc_expanded")
+
+# =========================================================
+# DESCRIPTIVES (FAILURE7)
+# =========================================================
+
+df_expanded %>%
+  group_by(index_sector) %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# =========================================================
+# SENSITIVITY: WHOLE DATA (NO INDEX SECTOR)
+# =========================================================
+
+dt %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# sama ab failurelle
+dt %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(abfailure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# kaikki failures (visit-level)
+dt %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failed_visit == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# =========================================================
+# DESCRIPTIVES BY SECTOR
+# =========================================================
+
+dt %>%
+  group_by(Sector) %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failure7 == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# =========================================================
+# GLMM MODELS – VISIT-LEVEL SECTOR
+# =========================================================
+
+# crude
+model <- glmmTMB(
+  failed_visit ~ Sector + (1|FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# adjusted
+model <- glmmTMB(
+  failed_visit ~ Sector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# =========================================================
+# INDEX-SECTOR ANALYSIS
+# =========================================================
+
+df_expanded %>%
+  group_by(index_sector) %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(failed_visit == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# =========================================================
+# GLMM – INDEX SECTOR
+# =========================================================
+
+model <- glmmTMB(
+  failed_visit ~ index_sector + (1|FID),
+  data = df_expanded,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# adjusted
+model <- glmmTMB(
+  failed_visit ~ index_sector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = df_expanded,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+# =========================================================
+# ANTIBIOTIC TREATMENT FAILURE
+# =========================================================
+
+# HUOM: sama logiikka kuin index_sector mutta abindexsector
+
+df_expanded <- dt %>%
+  mutate(
+    abindexsector = case_when(
+      abindexsector %in% c("1","2") ~ abindexsector,
+      abindexsector == "both" ~ "1,2"
+    )
+  ) %>%
+  separate_rows(abindexsector, sep = ",")
+
+# HUOM: tämä rivi on BUGI-altis:
+# filter(!abindexsector == "NA") → ei sama kuin !
+df <- df_expanded %>%
+  filter(abindexsector != "NA")
+
+# descriptives
+df %>%
+  group_by(abindexsector) %>%
+  summarise(
+    n_total = n(),
+    n_failure = sum(abfailure == 1, na.rm = TRUE),
+    pct_failure = 100 * n_failure / n_total
+  )
+
+# =========================================================
+# GLMM – AB FAILURE
+# =========================================================
+
+model <- glmmTMB(
+  abfailure ~ abindexsector + (1|FID),
+  data = df,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+model <- glmmTMB(
+  abfailure ~ abindexsector + Sukupuoli + Ikalk + kieli +
+    conditions + erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = df,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))

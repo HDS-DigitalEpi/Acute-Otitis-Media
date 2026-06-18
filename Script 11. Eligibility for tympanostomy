@@ -1,0 +1,304 @@
+# ============================================================
+# 1. ENVIRONMENT SETUP
+# ============================================================
+
+setwd("/JaninaH/codes/")        # Working directory for scripts and outputs
+.libPaths("/apps/R/lib/")       # Custom library path
+
+# Load required packages
+library(nanoparquet)   # efficient parquet reading
+library(dplyr)         # data manipulation (tidy syntax)
+library(lubridate)     # date handling
+library(readr)
+library(data.table)    # high-performance data processing
+library(purrr)
+library(tidyr)
+library(glmmTMB)       # mixed-effects models
+library(openxlsx)
+library(sandwich)
+
+set.seed(2)            # Ensure reproducibility where stochastic elements exist
+
+# ============================================================
+# 2. LOAD DATA
+# ============================================================
+
+# Otitis media visit data
+korvat <- read_parquet("/media/volume/JaninaH/korva_historia") %>%
+  filter(!is.na(KOODI))
+
+# Register data including procedures and covariates
+dt <- read_parquet("/media/volume/JaninaH/avojahilmop_26_4.parquet")
+
+setDT(korvat)
+setDT(dt)
+
+# Standardize date format
+korvat[, visit_date := as.IDate(PVM)]
+
+# ============================================================
+# 3. IDENTIFY TYMPANOSTOMY PROCEDURES
+# ============================================================
+
+# Procedure codes corresponding to tympanostomy tube placement (no other procedures here so numbers are enough)
+putki <- dt[
+  grepl("20|1019", TOIMP),
+  .(FID, proc_date = as.IDate(PVM))
+]
+
+# Ensure uniqueness: one row per patient per procedure date
+putki <- unique(putki, by = c("FID","proc_date"))
+
+# ============================================================
+# 4. LINK PRIOR VISITS TO EACH PROCEDURE
+# ============================================================
+
+# Attach all historical visits to each procedure (many-to-many merge)
+df <- merge(
+  putki,
+  korvat,
+  by = "FID",
+  allow.cartesian = TRUE
+)
+
+# Restrict to relevant look-back window:
+# 12 months + 30-day allowance before procedure
+df <- df[
+  visit_date <= proc_date &
+  visit_date >= proc_date - 395
+]
+
+# Ensure chronological order within each patient-procedure
+setorder(df, FID, proc_date, visit_date)
+
+# ============================================================
+# 5. DEFINE EPISODES (30-DAY WINDOW)
+# ============================================================
+
+# Episodes are defined dynamically for each procedure using a 30-day window.
+# A new episode begins if >30 days have passed since the start of the previous episode.
+
+df[, new_period := {
+  period_id <- 0L
+  start_date <- as.IDate(NA)
+  out <- integer(.N)
+  
+  for (i in seq_len(.N)) {
+    if (is.na(start_date) || visit_date[i] - start_date > 30) {
+      period_id <- period_id + 1L
+      start_date <- visit_date[i]
+    }
+    out[i] <- period_id
+  }
+  out
+}, by = .(FID, proc_date)]
+
+# ============================================================
+# 6. ASSIGN EPISODE START DATE
+# ============================================================
+
+# Each visit is assigned the start date of its episode
+df[, episode_start := min(visit_date),
+   by = .(FID, proc_date, new_period)]
+
+# ============================================================
+# 7. COUNT EPISODES WITHIN LOOK-BACK WINDOWS
+# ============================================================
+
+# Collapse to unique episodes per procedure
+episodes <- unique(df[, .(FID, proc_date, episode_start)])
+
+# Calculate time difference between procedure and episode start
+episodes[, diff := as.numeric(proc_date - episode_start)]
+
+# Count episodes in 6- and 12-month windows (with allowance)
+counts <- episodes[, .(
+  n_6m  = sum(diff <= 213),   # 180 + 30-day allowance
+  n_12m = sum(diff <= 395)    # 365 + 30-day allowance
+), by = .(FID, proc_date)]
+
+# ============================================================
+# 8. DEFINE RECURRENT DISEASE (rAOM)
+# ============================================================
+
+# Clinical criteria:
+# ≥3 episodes in 6 months OR ≥4 episodes in 12 months
+counts[, recurrent_flag := as.integer(n_6m >= 3 | n_12m >= 4)]
+
+# ============================================================
+# 9. MERGE RECURRENT STATUS BACK TO VISIT DATA
+# ============================================================
+
+df <- merge(df, counts, by = c("FID","proc_date"), all.x = TRUE)
+
+# Assign non-recurrent status to missing values
+df[is.na(recurrent_flag), recurrent_flag := 0]
+
+# ============================================================
+# 10. CREATE FINAL PROCEDURE-LEVEL DATASET
+# ============================================================
+
+final <- unique(df[, .(
+  FID,
+  proc_date,
+  recurrent_flag,
+  n_6m,
+  n_12m
+)], by = c("FID","proc_date"))
+
+# ============================================================
+# 11. DESCRIPTIVE CHECKS
+# ============================================================
+
+table(final$recurrent_flag)
+summary(final$n_6m)
+summary(final$n_12m)
+
+# ============================================================
+# 12. PREPARE ANALYSIS DATA WITH COVARIATES
+# ============================================================
+
+df <- read_parquet("/JaninaH/avojahilmop_26_4.parquet")
+
+# Age categorization
+df$Ikalk <- cut(
+  df$Ika,
+  breaks = c(0, 2, 5, 12, 18),
+  labels = c("0–2", "2–5", "5–12", "12–18"),
+  right = FALSE
+)
+
+# Comorbidity indicator
+df <- df %>%
+  mutate(
+    conditions = if_else(
+      J30 == 1 | L20 == 1 | J45_J46 == 1 |
+      D80_D89 == 1 | Q90 == 1,
+      1, 0
+    ),
+    conditions = if_else(is.na(conditions), 0, conditions),
+    sos = if_else(sos == "elakelaiset", "toissa", sos),
+    sos = if_else(is.na(sos), "tuntematon", sos)
+  )
+
+# Identify procedures and repeated procedures
+df <- df %>%
+  mutate(
+    putkitus = ifelse(grepl("20|1019", TOIMP), 1, 0),
+    date = as.Date(PVM)
+  ) %>%
+  group_by(FID) %>%
+  mutate(
+    useampi_putkitus = ifelse(sum(putkitus) > 1, 1, 0)
+  ) %>%
+  ungroup()
+
+# Keep patients with at least one procedure
+df_putki <- df %>%
+  group_by(FID) %>%
+  filter(any(putkitus == 1)) %>%
+  ungroup()
+
+# Remove procedure visits for comparator structure
+dtd <- df %>% filter(putkitus == 0)
+
+# Restrict to relevant cases
+pdf <- df_putki %>%
+  filter(FID %in% dtd$FID) %>%
+  filter(PVM >= as.Date("2020-01-01") &
+           PVM <= as.Date("2022-12-31")) %>%
+  distinct(FID, PVM, .keep_all = TRUE) %>%
+  filter(putkitus == 1)
+
+pdf_dt <- as.data.table(pdf)
+pdf_dt[, PVM := as.IDate(PVM)]
+final[, proc_date := as.IDate(proc_date)]
+
+# Merge recurrent status into final analysis dataset
+pdf_final <- merge(
+  pdf_dt,
+  final[, .(FID, proc_date, recurrent_flag)],
+  by.x = c("FID", "PVM"),
+  by.y = c("FID", "proc_date"),
+  all.x = TRUE
+)
+
+pdf_final[is.na(recurrent_flag), recurrent_flag := 0]
+
+# Sector classification
+pdf_final <- pdf_final %>%
+  mutate(
+    Sector = case_when(
+      grepl("^95|^6", PALTU) ~ 2,
+      TRUE ~ 1
+    )
+  )
+
+# ============================================================
+# 13. DESCRIPTIVE STATISTICS
+# ============================================================
+
+pdf_final %>%
+  group_by(Sector) %>%
+  summarise(
+    n = n(),
+    n_ehto1 = sum(recurrent_flag == 1, na.rm = TRUE),
+    pct_ehto1 = 100 * n_ehto1 / n
+  )
+
+# ============================================================
+# 14. FINAL MODEL DATASET
+# ============================================================
+
+pd <- pdf_final %>%
+  mutate(
+    PVM = as.Date(PVM),
+    month = month(PVM),
+    season = case_when(
+      month %in% c(12,1,2) ~ "winter",
+      month %in% c(3,4,5) ~ "spring",
+      month %in% c(6,7,8) ~ "summer",
+      month %in% c(9,10,11) ~ "autumn"
+    ),
+    dg = if_else(grepl("H66", KOODI), "H66", "H65_H67")
+  ) %>%
+  select(-month)
+
+# Combine higher age groups due to small sample size in this sub cohort
+pd <- pd %>%
+  mutate(
+    Ikalk = case_when(
+      Ikalk %in% c("12–18", "5–12") ~ "5-18",
+      TRUE ~ Ikalk
+    )
+  )
+
+# ============================================================
+# 15. MIXED-EFFECTS MODELS
+# ============================================================
+
+# Crude model
+model <- glmmTMB(
+  recurrent_flag ~ Sector + (1 | FID),
+  data = pd,
+  family = binomial
+)
+
+summary(model)
+exp(confint(model))
+
+# Adjusted model
+model <- glmmTMB(
+  recurrent_flag ~ Sector + Sukupuoli + Ikalk + kieli +
+    conditions + sos + season + (1 | FID),
+  data = pd,
+  family = binomial
+)
+
+summary(model)
+exp(confint(model))
+
+# Sample size checks
+length(unique(pd$FID[pd$Sector == 1]))
+length(unique(pd$FID[pd$Sector == 2]))
+

@@ -1,0 +1,153 @@
+# ------------------------------------------------------------
+# Descriptive summary table generation across analysis datasets
+# ------------------------------------------------------------
+
+# This script reads multiple analysis datasets, constructs
+# standardized descriptive summary tables, and exports them
+# into a single Excel workbook (one dataset per worksheet).
+# ------------------------------------------------------------
+
+library(dplyr)
+library(tidyr)
+library(openxlsx)
+library(arrow)   # required for read_parquet()
+
+# ------------------------------------------------------------
+# Define worksheet names (correspond to analysis outputs)
+# ------------------------------------------------------------
+
+sheet_names <- c(
+  "failure_doc_sec",
+  "failure_sec",
+  "failure_expanded",
+  "ab_failure_expanded",
+  "strategy_doc_sec",
+  "strategy_sec",
+  "ab_guide_doc_sec",
+  "ab_guide_sec"
+)
+
+# ------------------------------------------------------------
+# Define input file paths
+# Names must match sheet_names
+# ------------------------------------------------------------
+
+file_map <- c(
+  failure_doc_sec    = "/JaninaH/failuredata_doctor_sectoral.parquet",
+  failure_sec        = "/JaninaH/failuredata_sectoral.parquet",
+  ab_failure_expanded = "/JaninaH/ab_failure_expanded",
+  failure_expanded   = "/JaninaH/sec_doc_expanded",
+  strategy_doc_sec   = "/JaninaH/strategydt_worstcase_doctor_sector.parquet",
+  strategy_sec       = "/JaninaH/strategydt_worstcase_sector.parquet",
+  ab_guide_doc_sec   = "/JaninaH/abdt_worstcase_doctor_sector.parquet",
+  ab_guide_sec       = "/JaninaH/abdt_worstcase_sector.parquet"
+)
+
+# ------------------------------------------------------------
+# Define categorical variables included in summary tables
+# ------------------------------------------------------------
+
+cat_vars <- c(
+  "Ikalk", "kieli", "Sukupuoli", "sos", "erikoisala",
+  "season", "conditions", "raom", "dg", "Q90", "L20",
+  "J45_J46", "D80_D89", "J30"
+)
+
+# ------------------------------------------------------------
+# Function: transform dataset into wide summary table
+# ------------------------------------------------------------
+
+make_wide <- function(dt, cat_vars) {
+  
+  df2 <- dt %>%
+    mutate(
+      # Convert categorical variables to character for consistency
+      across(all_of(cat_vars), ~ as.character(.x)),
+      
+      # Replace missing values in selected binary variables
+      conditions = if_else(is.na(conditions), "0", conditions),
+      Q90        = if_else(is.na(Q90),        "0", Q90),
+      J45_J46    = if_else(is.na(J45_J46),    "0", J45_J46),
+      L20        = if_else(is.na(L20),        "0", L20),
+      J30        = if_else(is.na(J30),        "0", J30),
+      D80_D89    = if_else(is.na(D80_D89),    "0", D80_D89),
+      
+      # Ensure sector variable is character
+      sektori = as.character(Sector)
+    )
+  
+  # Reshape from wide to long format
+  long <- df2 %>%
+    pivot_longer(
+      cols = all_of(cat_vars),
+      names_to = "variable",
+      values_to = "value"
+    )
+  
+  # Compute counts and proportions by variable, level, and sector
+  counted <- long %>%
+    group_by(variable, value, sektori) %>%
+    summarise(n = n(), .groups = "drop") %>%
+    group_by(variable, sektori) %>%
+    mutate(p = n / sum(n)) %>%
+    ungroup()
+  
+  # Convert back to wide format for presentation
+  wide <- counted %>%
+    pivot_wider(
+      names_from = sektori,
+      values_from = c(n, p),
+      values_fill = 0
+    ) %>%
+    arrange(variable, value) %>%
+    mutate(
+      # Express proportions as percentages
+      across(starts_with("p_"), ~ round(.x * 100, 1))
+    )
+  
+  return(wide)
+}
+
+# ------------------------------------------------------------
+# Create Excel workbook
+# ------------------------------------------------------------
+
+wb <- createWorkbook()
+
+# ------------------------------------------------------------
+# Loop through datasets:
+# read → transform → write to Excel
+# ------------------------------------------------------------
+
+for (sh in sheet_names) {
+  
+  f <- file_map[[sh]]
+  
+  # Skip missing or undefined files
+  if (is.null(f) || !file.exists(f)) {
+    warning(sprintf("File not found (%s): %s", sh, f))
+    next
+  }
+  
+  # Read dataset (Parquet format)
+  dt <- read_parquet(f)
+  
+  # If sector variable exists → generate summary table
+  # Otherwise → export raw dataset
+  out <- if ("Sector" %in% names(dt)) {
+    make_wide(dt, cat_vars)
+  } else {
+    as.data.frame(dt)
+  }
+  
+  # Write to Excel worksheet
+  addWorksheet(wb, sh)
+  writeData(wb, sh, out)
+}
+
+# ------------------------------------------------------------
+# Save final output
+# ------------------------------------------------------------
+
+saveWorkbook(wb, "cohort_summary_tables.xlsx", overwrite = TRUE)
+

@@ -1,0 +1,40 @@
+
+# ------------------------------------------------------------
+# Classification of non-first-line antibiotic prescriptions
+# ------------------------------------------------------------
+#load libraries
+library(dplyr)
+# Read dataset (doctor-level, sector-stratified antibiotic data)
+df <- read_parquet("/JaninaH/abdt_worstcase_doctor_sector.parquet")
+
+# Restrict analysis to prescriptions classified as "other"
+# (i.e., non-first-line antibiotics according to study definition)
+df <- df %>%
+  filter(ablk == "other")
+
+# Standardize ATC codes (remove whitespace, convert to uppercase)
+df <- df %>%
+  mutate(ATC_CODE = toupper(trimws(ATC_CODE)))
+
+# Classify antibiotics into clinically relevant groups based on ATC codes and national guidelines
+dt <- df %>%
+  mutate(
+    ab_class = case_when(
+      grepl("^J01FA", ATC_CODE) ~ "Macrolides (J01FA)", #second-line
+      grepl("^J01DC|^J01DD", ATC_CODE) ~ "Cephalosporins 2nd/3rd gen (J01DC/J01DD)", #second-line
+      grepl("^J01EE", ATC_CODE) ~ "Trimethoprim–sulfa (J01EE)", #second-line
+      grepl("^J01M|^J01AA|^J01GB", ATC_CODE) ~  #not recommended for children
+        "Fluoroquinolones, tetracyclines, aminoglycosides",
+      TRUE ~ "Other" #suboptimal efficacy against common AOM pathogens
+    )
+  )
+
+# Tabulate distribution of antibiotic classes by sector
+table(dt$ab_class, dt$Sector)
+
+# Inspect remaining heterogeneous group ("Other")
+oth <- dt %>%
+  filter(ab_class == "Other")
+
+# Examine detailed ATC code distribution within the "Other" category
+table(oth$ATC_CODE, oth$Sector)

@@ -1,0 +1,297 @@
+## ============================================================================
+## Data Preparation Script: Otitis Media in Children (ICD-10: H65–H67)
+## Study period: 2017–2022 | Population: Children under 18 years
+## Data sources: HILMO (specialised care), AvoHILMO (primary care), DVV (demographics)
+## ============================================================================
+
+set.seed(1)
+
+# Set working directory and shared library path
+setwd("/media/volume/JaninaH/codes/")
+.libPaths("/shared-directory/sd-tools/apps/R/lib/")
+
+# Load required libraries
+library(nanoparquet)   # Reading/writing Parquet files
+library(dplyr)         # Data manipulation
+library(lubridate)     # Date handling
+library(readr)         # CSV reading (including chunked reading)
+library(data.table)    # Fast large-file reading
+library(stringr)       # String operations
+
+
+## ============================================================================
+## SECTION 1: HILMO (Specialised Care) – ICD-10 Diagnoses H65–H67
+## ============================================================================
+
+# --- 1.1 Read HILMO visit data (columns: patient ID, visit ID, discharge date,
+#         physician hash, and service provider) across all time periods ----------
+
+h0712 <- read_delim("visit_data_HILMO1.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(FID, HILMOID, TUPVA, FD_HASH_Rekisterointinumero, PALTU)
+
+h1317 <- read_delim("visit_data_HILMO2.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(FID, HILMOID, TUPVA, FD_HASH_Rekisterointinumero, PALTU)
+
+h1820 <- read_delim("visit_data_HILMO3.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(FID, HILMOID, TUPVA, FD_HASH_Rekisterointinumero, PALTU)
+
+h2122 <- read_delim("visit_data_HILMO4.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(FID, HILMOID, TUPVA, FD_HASH_Rekisterointinumero, PALTU)
+
+h9806 <- read_delim("visit_data_HILMO4.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(FID, HILMOID, TUPVA, FD_HASH_Rekisterointinumero, PALTU)
+
+
+# --- 1.2 Read HILMO ICD-10 diagnosis files and filter for H65–H67
+#         (otitis media and related conditions) --------------------------------
+
+icd_1 <- read_delim("diagnosis_data_HILMO_ICD10_1.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(HILMOID, KOODI, KENTTA)
+filtered_1 <- subset(icd_1, grepl("^H65|^H66|^H67", KOODI, ignore.case = TRUE))
+
+icd_2 <- read_delim("diagnosis_data_HILMO_ICD10_2.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(HILMOID, KOODI, KENTTA)
+filtered_2 <- subset(icd_2, grepl("^H65|^H66|^H67", KOODI, ignore.case = TRUE))
+
+icd_3 <- read_delim("diagnosis_data_HILMO_ICD10_3.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(HILMOID, KOODI, KENTTA)
+filtered_3 <- subset(icd_3, grepl("^H65|^H66|^H67", KOODI, ignore.case = TRUE))
+
+icd_4 <- read_delim("diagnosis_data_HILMO_ICD10_4.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(HILMOID, KOODI, KENTTA)
+filtered_4 <- subset(icd_4, grepl("^H65|^H66|^H67", KOODI, ignore.case = TRUE))
+
+icd_5 <- read_delim("diagnosis_data_HILMO_ICD10_5.csv",
+                    delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+  select(HILMOID, KOODI, KENTTA)
+filtered_5 <- subset(icd_5, grepl("^H65|^H66|^H67", KOODI, ignore.case = TRUE))
+
+
+# --- 1.3 Combine all diagnosis files and merge with visit data ----------------
+
+# Combine filtered diagnosis data across all ICD-10 files
+icd_data <- bind_rows(filtered_1, filtered_2, filtered_3, filtered_4, filtered_5)
+
+# Extract unique visit IDs (HILMOID) from diagnosis data for efficient filtering
+HILMOT <- unique(icd_data$HILMOID)
+
+# Filter visit data to retain only visits with an H65–H67 diagnosis
+h07 <- h0712 %>% filter(HILMOID %in% HILMOT)
+h13 <- h1317 %>% filter(HILMOID %in% HILMOT)
+h18 <- h1820 %>% filter(HILMOID %in% HILMOT)
+h21 <- h2122 %>% filter(HILMOID %in% HILMOT)
+h98 <- h9806 %>% filter(HILMOID %in% HILMOT)
+
+# Combine filtered visit data across all time periods
+combined_df <- bind_rows(h07, h13, h18, h21, h98)
+
+# Merge diagnosis codes with visit data (retain all diagnosis rows)
+cdf1 <- merge(icd_data, combined_df, by = "HILMOID", all.x = TRUE)
+
+# Verify data integrity: 0 missing FIDs expected
+head(cdf1)
+sum(is.na(cdf1$FID))   # Expected: 0
+nrow(cdf1)             # Expected: 1,497,577
+
+# Convert discharge date (TUPVA) from character to Date format
+cdf1$TUPVA <- as.Date(as.character(cdf1$TUPVA), format = "%d.%m.%Y")
+
+# Save merged HILMO data with H65–H67 diagnoses
+cdf1 %>% write_parquet(paste0("/JaninaH/", "icd_65_67_ja_hilmo.parquet"))
+
+# Reload saved data for downstream processing
+hilmot <- read_parquet(paste0(/JaninaH/", "icd_65_67_ja_hilmo.parquet"))
+
+
+## ============================================================================
+## SECTION 2: AvoHILMO (Primary Care) – ICD-10 Diagnoses H65–H67
+## ============================================================================
+
+# --- 2.1 Loop through AvoHILMO visit reason files (14 files) and filter
+#         for H65–H67 diagnoses in ICD-10-coded visit reason fields -----------
+
+
+for (i in 1:14) {
+  filename <- paste0("diagnosis_data_AvoHILMO_KAYNTISYY_", i, ".csv")
+  
+  # Read visit reason data; select visit ID, classification code, and code type
+  dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+    select(AVOHILMOID, LUOKITUS, LUOKITUSLUOKKA)
+  
+  assign(paste0("icd_", i), dat)
+  
+  # Retain only ICD-10-coded entries with H65–H67 codes (otitis media diagnoses)
+  dat_filtered <- dat %>%
+    filter(LUOKITUSLUOKKA == "icd10" &
+             grepl("^H65|^H66|^H67", LUOKITUS, ignore.case = TRUE))
+  
+  assign(paste0("icdf", i), dat_filtered)
+}
+
+# Combine all filtered AvoHILMO visit reason diagnoses
+syyt <- bind_rows(icdf1, icdf2, icdf3, icdf4, icdf5, icdf6, icdf7,
+                  icdf8, icdf9, icdf10, icdf11, icdf12, icdf13, icdf14)
+
+# Save AvoHILMO diagnosis data
+syyt %>% write_parquet(paste0("/JaninaH/", "AH_syyt.parquet"))
+syyt <- read_parquet("/JaninaH/AH_syyt.parquet")
+
+
+# --- 2.2 Read long-term diagnosis (pitkadiag) files from AvoHILMO and
+#         filter for H65–H67 as supplementary diagnosis source ----------------
+
+P1 <- read_delim("long_term_diagnosis_pitkadiag_1.csv",
+                 delim = ";", col_types = cols(.default = "c"),
+                 locale = locale(encoding = "UTF-8")) %>%
+  select(AVOHILMOID, ICD10)
+p1 <- P1 %>% filter(grepl("^H67|^H66|^H65", ICD10, ignore.case = TRUE))
+
+P2 <- read_delim("long_term_diagnosis_pitkadiag_2.csv",
+                 delim = ";", col_types = cols(.default = "c"),
+                 locale = locale(encoding = "UTF-8")) %>%
+  select(AVOHILMOID, ICD10)
+p2 <- P2 %>% filter(grepl("^H67|^H66|^H65", ICD10, ignore.case = TRUE))
+
+# Combine both long-term diagnosis sources
+p12 <- bind_rows(p1, p2)
+
+# Merge AvoHILMO visit reason and long-term diagnoses into one dataset
+avohilmot <- bind_rows(syyt, p12)
+
+p12 %>% write_parquet(paste0("/JaninaH/", "AH_pitka.parquet"))
+
+# Extract unique visit IDs for efficient visit data filtering
+id <- unique(avohilmot$AVOHILMOID)
+sum(is.na(avohilmot$AVOHILMOID))  # Expected: 0
+
+
+# --- 2.3 Read AvoHILMO visit-level data (2017–2022) and filter to
+#         visits with H65–H67 diagnoses using visit IDs extracted above --------
+
+# Years 2017–2020 share a common file naming convention
+for (i in 17:20) {
+  filename <- paste0("visit_data_AvoHILMO_AH_", i, ".csv")
+  
+  # Read visit data; select visit ID, patient ID, provider, end time, and physician hash
+  dat <- read_delim(filename, delim = ";", col_types = cols(.default = "c"),
+                    locale = locale(encoding = "UTF-8")) %>%
+    select(AVOHILMOID, FID, PALVELUNTUOTTAJA, KAYNTI_LOPPUI, FD_HASH_Rekisterointinumero)
+  
+  dat_filtered <- dat %>% filter(AVOHILMOID %in% id)
+  assign(paste0("Ahs", i), dat_filtered)
+}
+
+# Years 2021–2022 are split into two files each
+Ahs21_1 <- read_delim("visit_data_AvoHILMO_AH_21_1.csv",
+                      delim = ";", col_types = cols(.default = "c"),
+                      locale = locale(encoding = "UTF-8")) %>%
+  select(FID, AVOHILMOID, KAYNTI_LOPPUI, PALVELUNTUOTTAJA, FD_HASH_Rekisterointinumero) %>%
+  filter(AVOHILMOID %in% id)
+
+Ahs21_2 <- read_delim("visit_data_AvoHILMO_AH_21_2.csv",
+                      delim = ";", col_types = cols(.default = "c"),
+                      locale = locale(encoding = "UTF-8")) %>%
+  select(FID, AVOHILMOID, KAYNTI_LOPPUI, PALVELUNTUOTTAJA, FD_HASH_Rekisterointinumero) %>%
+  filter(AVOHILMOID %in% id)
+
+Ahs22_1 <- read_delim("visit_data_AvoHILMO_AH_22_1.csv",
+                      delim = ";", col_types = cols(.default = "c"),
+                      locale = locale(encoding = "UTF-8")) %>%
+  select(FID, AVOHILMOID, KAYNTI_LOPPUI, PALVELUNTUOTTAJA, FD_HASH_Rekisterointinumero) %>%
+  filter(AVOHILMOID %in% id)
+
+Ahs22_2 <- read_delim("visit_data_AvoHILMO_AH_22_2.csv",
+                      delim = ";", col_types = cols(.default = "c"),
+                      locale = locale(encoding = "UTF-8")) %>%
+  select(FID, AVOHILMOID, KAYNTI_LOPPUI, PALVELUNTUOTTAJA, FD_HASH_Rekisterointinumero) %>%
+  filter(AVOHILMOID %in% id)
+
+# Combine all AvoHILMO visit data (2017–2022)
+ah1722 <- bind_rows(Ahs17, Ahs18, Ahs19, Ahs20, Ahs21_1, Ahs21_2, Ahs22_1, Ahs22_2)
+ah1722 %>% write_parquet(paste0("/JaninaH/", "ahs1722.parquet"))
+
+# Ensure AVOHILMOID is character type for consistent merging
+ah1722$AVOHILMOID <- as.character(ah1722$AVOHILMOID)
+
+# Merge visit data with diagnosis data
+avot <- merge(ah1722, avohilmot, by = "AVOHILMOID")
+head(avot)
+sum(is.na(avot$KOODI))
+
+# Harmonise diagnosis column: use LUOKITUS (visit reason) where available,
+# fall back to ICD10 (long-term diagnosis) if LUOKITUS is missing
+avot <- avot %>%
+  mutate(KOODI = if_else(is.na(LUOKITUS), ICD10, LUOKITUS))
+
+n_distinct(avot$FID)  # Unique patients: 351,260
+
+# Convert visit end date/time to Date format
+avot$KAYNTI_LOPPUI <- as.Date(as.character(avot$KAYNTI_LOPPUI), format = "%d.%m.%Y %H:%M")
+
+# Retain only necessary columns
+avot <- subset(avot, select = c(1, 2, 3, 4, 5, 9))
+
+# Save cleaned AvoHILMO data
+avot %>% write_parquet(paste0("/JaninaH/", "AH_ja_AHpitka_syyt_DATE.parquet"))
+avot <- read_parquet(paste0("/JaninaH/", "AH_ja_AHpitka_syyt_DATE.parquet"))
+
+
+## ===================================================================================================
+## SECTION 3: Demographic Information from Digital and Population Data Services Agency (DVV Register)
+## ===================================================================================================
+
+# --- 3.1 Read DVV population register data ------------------------------------
+
+# Preview column names
+cols <- names(fread("/DVV//Tulokset_2024_HY.csv",
+                    nrows = 0, sep = ";"))
+
+# Read DVV data: patient ID, date of birth, sex, and native language
+df <- fread("/media/volume/Data_20260319//DVV//Tulokset_2024_HY.csv",
+            select = c("FID", "Syntymapaiva", "Sukupuoli", "Aidinkieli"),
+            sep = ";")
+
+# Convert date of birth from numeric (YYYYMMDD) to Date format
+df$Syntymapaiva <- sprintf("%08d", df$Syntymapaiva)
+df$Syntymapaiva <- as.Date(df$Syntymapaiva, format = "%Y%m%d")
+
+
+# --- 3.2 Merge demographics and restrict to children under 18 years ----------
+
+# Merge demographic data into AvoHILMO and HILMO datasets
+avot   <- left_join(avot,   df, by = "FID")   # n = 678,340
+hilmot <- left_join(hilmot, df, by = "FID")   # n = 1,498,477
+
+# Calculate age at visit date (in years) and filter to paediatric visits (<18 years)
+avot$Ika   <- as.numeric(difftime(avot$KAYNTI_LOPPUI, avot$Syntymapaiva, units = "days")) / 365.25
+avot       <- subset(avot, Ika < 18)           # n = 476,407
+
+hilmot$Ika <- as.numeric(difftime(hilmot$TUPVA, hilmot$Syntymapaiva, units = "days")) / 365.25
+hilmot     <- subset(hilmot, Ika < 18)         # n = 1,157,924
+
+# Save age-filtered datasets
+hilmot %>% write_parquet(paste0("/JaninaH/", "hilmo_alle18.parquet"))
+hilmot <- read_parquet(paste0("/JaninaH/", "hilmo_alle18.parquet"))
+avot   %>% write_parquet(paste0("/JaninaH/", "avohilmo_ja_pitka_alle18.parquet"))
+
+

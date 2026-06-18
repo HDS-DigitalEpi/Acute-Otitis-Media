@@ -1,0 +1,245 @@
+# ============================================================
+# 1. LOAD PACKAGES
+# ============================================================
+
+library(tidyverse)   # data manipulation and plotting
+library(ragg)        # high-resolution graphics rendering
+library(scales)      # axis transformations
+library(tibble)      # tidy data construction
+
+# ============================================================
+# 2. CREATE INPUT DATA FOR FOREST PLOT
+# ============================================================
+
+# Each row corresponds to a category within an outcome.
+# Header rows are included to structure the plot visually.
+
+df <- tribble(
+  ~outcome, ~OR, ~CI_low, ~CI_high, ~private_pct, ~public_pct,
+
+  # -------------------------
+  "Management strategy", NA, NA, NA, NA, NA,
+  "no antibiotic treatment", 1, NA, NA, "27.7 (46 312)", "20.4 (87 514)",
+  "antibiotic treatmentᵃ", 0.55, 0.54, 0.56, "72.3 (120 824)", "79.6 (341 984)",
+  "antibiotic treatmentᵇ", 1.45, 1.41, 1.49, "- (-)", "- (-)",
+  "", NA, NA, NA, NA, NA,
+
+  # Additional outcome groups structured similarly...
+  # (Management failure, early failure, guideline adherence, etc.)
+
+  # -------------------------
+  "Eligibility for tympanostomyʲ", NA, NA, NA, NA, NA,
+  "eligibility criteria not met", 1, NA, NA, "57.1 (2004)", "47.0 (2255)",
+  "eligibility criteria metᵃ", 0.65, 0.60, 0.69, "42.9 (1503)", "53.0 (2542)",
+  "eligibility criteria metᵇ", 0.51, 0.46, 0.57, "- ", "-"
+)
+
+# ============================================================
+# 3. DEFINE CUSTOM X-AXIS TRANSFORMATION
+# ============================================================
+
+# Compress large OR values to improve readability:
+# - Range 0–3.5 remains linear
+# - Range >3.5 is compressed into 15% of the axis space
+
+compress_x <- trans_new(
+  name = "compress_x",
+  transform = function(x) ifelse(x <= 3.5, x,
+                                 3.5 + (x - 3.5) * 0.15),
+  inverse   = function(x) ifelse(x <= 3.5, x,
+                                 (x - 3.5)/0.15 + 3.5)
+)
+
+# ============================================================
+# 4. DATA PREPROCESSING FOR PLOT
+# ============================================================
+
+df2 <- df %>%
+  mutate(
+    OR = ifelse(OR == "ref", 1, as.numeric(OR)),
+
+    # Identify structural rows
+    is_header = is.na(OR) & is.na(CI_low) & is.na(CI_high),
+    is_ref = OR == 1 & (is.na(CI_low) | is.na(CI_high)),
+
+    # Row indexing for positioning
+    row_id = row_number(),
+
+    # Format OR labels
+    OR_label = case_when(
+      is_header ~ "",
+      is_ref ~ "ref",
+      TRUE ~ sprintf("%.2f (%.2f–%.2f)", OR, CI_low, CI_high)
+    ),
+
+    # Format percentage labels
+    private_label = ifelse(is_header, "", private_pct),
+    public_label  = ifelse(is_header, "", public_pct)
+  )
+
+# ============================================================
+# 5. DEFINE LAYOUT POSITIONS FOR TABLE COLUMNS
+# ============================================================
+
+text_left   <- -5.7   # left boundary for outcome labels
+text_right  <- -1.2   # right boundary for text area
+forest_left <-  0     # start of forest plot area
+forest_right <- 7.7   # end of forest plot
+
+x_outcome <- text_left
+x_private <- -2.3
+x_public  <- -1.25
+x_or      <- -0.05
+
+# Header row position
+header_y <- min(df2$row_id) - 0.8
+header_df <- tibble(row_id = header_y)
+
+# ============================================================
+# 6. DEFINE FOREST PLOT BACKGROUND REGION
+# ============================================================
+
+# Identify first reference row to anchor background shading
+first_ref_row <- df2 %>% 
+  filter(is_ref) %>% 
+  summarise(min_row = min(row_id, na.rm = TRUE)) %>% 
+  pull(min_row)
+
+y_top_grey    <- first_ref_row - 0.5
+y_bottom_grey <- max(df2$row_id) + 0.5
+
+# ============================================================
+# 7. BUILD FOREST PLOT
+# ============================================================
+
+final_plot <- ggplot(df2, aes(y = row_id)) +
+
+  # White background for text columns
+  annotate("rect",
+           xmin = text_left, xmax = text_right,
+           ymin = -Inf, ymax = Inf,
+           fill = "white") +
+
+  # Grey background for forest plot area
+  annotate("rect",
+           xmin = forest_left, xmax = forest_right,
+           ymin = y_top_grey, ymax = y_bottom_grey,
+           fill = "grey92") +
+
+  # Column headers
+  geom_text(data = header_df,
+            aes(x = x_outcome, label = "Outcome"),
+            fontface = "bold", hjust = 0, size = 5) +
+
+  geom_text(data = header_df,
+            aes(x = x_private, label = "Private, No.(%)"),
+            fontface = "bold", hjust = 1, size = 5) +
+
+  geom_text(data = header_df,
+            aes(x = x_public, label = "Public, No.(%)"),
+            fontface = "bold", hjust = 1, size = 5) +
+
+  geom_text(data = header_df,
+            aes(x = x_or, label = "OR (95% CI)"),
+            fontface = "bold", hjust = 1, size = 5) +
+
+  # Reference line (OR = 1)
+  geom_segment(aes(x = 1, xend = 1,
+                   y = y_bottom_grey, yend = y_top_grey),
+               inherit.aes = FALSE) +
+
+  # Threshold reference line (visual aid)
+  geom_segment(aes(x = 3.5, xend = 3.5,
+                   y = y_bottom_grey, yend = y_top_grey),
+               inherit.aes = FALSE, linetype = "dashed") +
+
+  # Confidence intervals
+  geom_errorbarh(
+    data = subset(df2, !is_header & !is_ref),
+    aes(xmin = CI_low, xmax = CI_high),
+    height = 0.25, size = 0.6
+  ) +
+
+  # Point estimates
+  geom_point(
+    data = subset(df2, !is_header & !is_ref),
+    aes(x = OR),
+    shape = 15,
+    size = 4
+  ) +
+
+  # Text columns
+  geom_text(aes(x = x_outcome,
+                label = outcome,
+                fontface = ifelse(is_header, "bold", "plain")),
+            hjust = 0, size = 4.7) +
+
+  geom_text(aes(x = x_private, label = private_label),
+            hjust = 1, size = 4.7) +
+
+  geom_text(aes(x = x_public, label = public_label),
+            hjust = 1, size = 4.7) +
+
+  geom_text(aes(x = x_or, label = OR_label),
+            hjust = 1, size = 4.7) +
+
+  # X-axis scaling
+  scale_x_continuous(
+    trans = compress_x,
+    breaks = c(0, 1, 2, 3, 3.5, 7),
+    expand = c(0, 0)
+  ) +
+
+  scale_y_reverse(expand = c(0, 0)) +
+
+  coord_cartesian(
+    xlim = c(-5.7, 7.8),
+    clip = "off"
+  ) +
+
+  theme_minimal() +
+  theme(
+    panel.clip = "off",
+    plot.margin = margin(20, 20, 120, 20),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    panel.grid = element_blank()
+  )
+
+# ============================================================
+# 8. ADD RISK DIRECTION LABELS
+# ============================================================
+
+y_risk <- y_top_grey - 0.6
+
+p_final <- final_plot +
+  annotate("text", x = 0.6, y = y_risk,
+           label = "Lower risk", fontface = "bold") +
+  annotate("text", x = 2.1, y = y_risk,
+           label = "Higher risk for private sector",
+           fontface = "bold")
+
+# ============================================================
+# 9. SAVE FIGURE
+# ============================================================
+
+ragg::agg_png("forest.png", width = 9200, height = 8970, res = 700)
+print(p_final)
+dev.off()
+
+# ============================================================
+# 10. FOOTNOTE TEXT (MODEL STRUCTURE AND DEFINITIONS)
+# ============================================================
+
+footnote_text <- "a = crude mixed model ... j = tympanostomy eligible if ≥3 episodes in 6 months or ≥4 in 12 months."
+
+p <- p_final +
+  labs(caption = footnote_text)
+
+# Wrap caption text for readability
+footnote_text <- stringr::str_wrap(footnote_text, width = 179)
+
+ragg::agg_png("forest_with_caption.png", width = 9200, height = 8970, res = 700)
+print(p)
+dev.off()
+

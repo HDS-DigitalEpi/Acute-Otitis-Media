@@ -1,0 +1,106 @@
+# =========================================================
+# GUIDELINE ADHERENCE (binary outcome)
+# =========================================================
+
+dt <- read_parquet("/JaninaH/abdt_worstcase_doctor_sector.parquet")
+
+# dichotomic outcome
+dt <- dt %>%
+  mutate(
+    suos = if_else(
+      ablk %in% c("Amoxicillin", "Amoxicillin-clavulanic"),
+      1, 0
+    )
+  )
+
+# 1 = guideline-concordant
+# 0 = non-first-line
+
+# =========================================================
+# CLEANING 
+# =========================================================
+
+dt <- dt %>%
+  mutate(conditions = if_else(is.na(conditions), 0, conditions))
+
+dt <- dt %>%
+  mutate(sos = if_else(sos == "elakelaiset", "toissa", sos))
+
+dt <- dt %>%
+  mutate(erikoisala = if_else(is.na(erikoisala), "ei", erikoisala))
+
+dt <- dt %>%
+  mutate(sos = if_else(is.na(sos), "tuntematon", sos))
+
+# =========================================================
+# FACTOR CONVERSION
+# =========================================================
+
+dt$suos   <- factor(dt$suos)   # binary response
+dt$Sector <- factor(dt$Sector)
+dt$FID    <- factor(dt$FID)
+dt$season <- factor(dt$season)
+
+dt$kieli <- factor(dt$kieli)
+dt$conditions <- factor(dt$conditions)
+dt$erikoisala <- factor(dt$erikoisala)
+dt$Ikalk <- factor(dt$Ikalk)
+dt$dg <- factor(dt$dg)
+dt$Sukupuoli <- factor(dt$Sukupuoli)
+dt$raom <- factor(dt$raom)
+
+# =========================================================
+# GLMM – CRUDE
+# =========================================================
+
+model <- glmmTMB(
+  suos ~ Sector + (1|FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+summary(model)
+exp(confint(model))
+
+
+# =========================================================
+# GLMM – ADJUSTED
+# =========================================================
+
+model <- glmmTMB(
+  suos ~ Sector + Sukupuoli + Ikalk + kieli + conditions +
+    erikoisala + sos + season + raom + dg +
+    (1 | FID),
+  data = dt,
+  family = binomial(link = "logit")
+)
+
+summary(model)
+exp(confint(model))
+
+# =========================================================
+# COMPARISON WITH NON-MIXED MODEL
+# =========================================================
+
+
+model <- glm(
+  suos ~ Sector,
+  data = dt,
+  family = binomial(link = "logit")
+)
+
+summary(model)
+exp(coef(model))
+exp(confint(model))
+
+#AIC values better in mixed-effects model
+# =========================================================
+# DESCRIPTIVES
+# =========================================================
+
+dt %>%
+  group_by(Sector) %>%
+  summarise(
+    n_total = n(),
+    n_suos = sum(suos == 1, na.rm = TRUE),
+    pct_suos = 100 * n_suos / n_total
+  )
