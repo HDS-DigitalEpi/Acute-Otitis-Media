@@ -1,0 +1,95 @@
+library(ggplot2)
+library(dplyr)
+
+#Category names
+df <- data.frame(
+  category = c(
+    "Cephalosporins\n2nd/3rd gen.",
+    "Fluoroquinolones,\naminoglycosides and\ntetracyclines",
+    "Macrolides",
+    "Suboptimal antibiotics \n(cephalexin, v-penicillin etc.)",
+    "Trimethoprim-sulfa"
+  ),
+  # Sector indicator (public vs private)
+  sector = rep(c("Public sector", "Private sector"), each = 5),
+  # Percentage distribution within sector
+  percent = c(0.6, 0.6, 23, 30.4, 45.5,   # Public
+              0.3, 0.3, 32.3, 25.5, 41.6),  # Private
+  # Absolute counts shown in annotations
+  n = c(259, 244, 9656, 12811, 19098,
+        49, 61, 5315, 4200, 6873)
+)
+
+# Ensure consistent ordering of categories and sectors in the plot
+df$category <- factor(df$category, levels = unique(df$category))
+df$sector <- factor(df$sector, levels = c("Public sector", "Private sector"))
+
+# Construct bar plot comparing sector-specific distributions
+figure3 <- ggplot(df, aes(x = category, y = percent, fill = sector)) +
+  
+  # Bar chart with side-by-side (dodged) sectors
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(width = 0.7),
+    width = 0.6
+  ) +
+  
+  # Annotate bars with counts (n)
+  geom_text(
+    aes(label = paste0("n = ", format(n, big.mark = " "))),
+    position = position_dodge(width = 0.7),
+    vjust = -0.5,
+    size = 2.5
+  ) +
+  
+  # Greyscale palette suitable for print journals
+  scale_fill_manual(
+    values = c("Public sector" = "grey70",
+               "Private sector" = "grey40")
+  ) +
+  
+  # Y-axis formatted as percentages with fixed range
+  scale_y_continuous(
+    limits = c(0, 50),
+    breaks = seq(0, 50, 5),
+    labels = function(x) paste0(x, " %")
+  ) +
+  
+  # Minimal labeling (per journal style)
+  labs(
+    y = "Percentage",
+    x = NULL,
+    fill = NULL
+  ) +
+  
+  # Base theme adjustments for publication
+  theme(
+    text = element_text(family = "Arial"),  # journal-compatible font
+    axis.text = element_text(color = "black"),
+    axis.title = element_text(color = "black"),
+    legend.text = element_text(color = "black"),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white")
+  ) +
+  
+  theme_classic() +
+  
+  # Final formatting adjustments
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(size = 9, lineheight = 0.9),  # compact multiline labels
+    axis.title.y = element_text(size = 9),
+    panel.grid.major.y = element_line(color = "grey85"),  # light horizontal guides
+    panel.grid.minor.y = element_blank()
+  )
+
+# Save figure in high-resolution PNG (journal submission format)
+ggsave(
+  filename = "figure3.png",
+  plot = figure3,
+  width = 7,        # double-column width
+  height = 4.5,
+  dpi = 600,        # publication quality
+  units = "in",
+  bg = "white"      # ensure non-transparent background
+)
